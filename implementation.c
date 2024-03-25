@@ -589,38 +589,72 @@ inode_t *path_resolve (superblock_t *sb, const char *path){
 
 /* End of helper functions */
 
-/* Implements an emulation of the stat system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-   
-   If path can be followed and describes a file or directory 
-   that exists and is accessable, the access information is 
-   put into stbuf. 
-
-   On success, 0 is returned. On failure, -1 is returned and 
-   the appropriate error code is put into *errnoptr.
-
-   man 2 stat documents all possible error codes and gives more detail
-   on what fields of stbuf need to be filled in. Essentially, only the
-   following fields need to be supported:
-
-   st_uid      the value passed in argument
-   st_gid      the value passed in argument
-   st_mode     (as fixed values S_IFDIR | 0755 for directories,
-                                S_IFREG | 0755 for files)
-   st_nlink    (as many as there are subdirectories (not files) for directories
-                (including . and ..),
-                1 for files)
-   st_size     (supported only for files, where it is the real file size)
-   st_atim
-   st_mtim
-
-*/
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           uid_t uid, gid_t gid,
                           const char *path, struct stat *stbuf) {
-  mount_filesystem(fsptr, fssize);
-  /* STUB */
-  return -1;
+  superblock_t *sb;
+  inode_t *node;
+  char *file_name;
+  int subdirectory_count;
+  size_t i;
+
+  sb = mount_filesystem(fsptr, fssize);
+
+  // Check if mount successful
+  if (sb == NULL){
+      *errnoptr = EFAULT;
+      return -1;
+  }
+
+  // Resolve path to get node
+  node = path_resolve(sb, path);
+
+  // Check if path resolution successful
+  if (node == NULL){
+      *errnoptr = ENOENT;
+      return -1;
+  }
+  
+  // Extract file name from the path
+  file_name = strchr(path, '/') + 1;
+
+  // Check if file name length exceeds max allowed length
+  if (strlen(file_name) >= NAME_MAX_LEN){
+      *errnoptr = ENAMETOOLONG;
+      return -1;
+  }
+
+  // Initialize stbuf w/ 0s
+  memset(stbuf, 0, sizeof(struct stat));
+
+  // Fill in stbuf fields w/ appropriate values
+  stbuf->st_uid = uid;
+  stbuf->st_gid = gid;
+  stbuf->st_atime = (time_t) node->time[0].tv_sec;
+  stbuf->st_mtime = (time_t) node->time[1].tv_sec;
+
+  // Determine the type of node inode (directory or file) and set st_mode and st_nlink accordingly
+  if (node->type == 2){ // Directory
+      stbuf->st_mode = __S_IFDIR | 0755;
+      inode_t *children = (inode_t *) offset_to_pointer(sb, node->value.directory.children);
+
+      subdirectory_count = 0;
+
+      // Count the number of subdirectories (excluding files)
+      for (i = (size_t) 0; i < node->value.directory.num_children; i++){
+            if (children[i].type == 2){
+                  subdirectory_count++;
+            }
+      }
+      stbuf->st_nlink = subdirectory_count;
+  }
+  // File
+  else if (node->type == 1){
+      stbuf->st_mode = __S_IFREG | 0755;
+      stbuf->st_size = node->value.file.size;
+      stbuf->st_nlink = 1;
+  }
+  return 0;
 }
 
 /* Implements an emulation of the readdir system call on the filesystem 

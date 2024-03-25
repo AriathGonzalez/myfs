@@ -131,15 +131,40 @@ inode_t *path_resolve (superblock_t *sb, const char *path);
 
 /* START fuse functions declarations */
 
-/// @brief 
-/// @param fsptr 
-/// @param fssize 
-/// @param errnoptr 
-/// @param uid 
-/// @param gid 
-/// @param path 
-/// @param stbuf 
-/// @return 
+/**
+ * @brief (4) Implements an emulation of the stat system call on the filesystem 
+ *        of size fssize pointed to by fsptr.
+ *
+ * If path can be followed and describes a file or directory 
+ * that exists and is accessible, the access information is 
+ * put into stbuf.
+ *
+ * On success, 0 is returned. On failure, -1 is returned and 
+ * the appropriate error code is put into *errnoptr.
+ *
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param fssize Size of the filesystem.
+ * @param errnoptr Pointer to store the error code in case of failure.
+ * @param uid User ID.
+ * @param gid Group ID.
+ * @param path Path to the file or directory.
+ * @param stbuf Pointer to a struct stat to store access information.
+ * @return 0 on success, -1 on failure.
+ * 
+ * man 2 stat documents all possible error codes and gives more detail
+ * on what fields of stbuf need to be filled in. Essentially, only the
+ * following fields need to be supported:
+ * - st_uid: the value passed in argument
+ * - st_gid: the value passed in argument
+ * - st_mode: (as fixed values S_IFDIR | 0755 for directories,
+ *             S_IFREG | 0755 for files)
+ * - st_nlink: (as many as there are subdirectories (not files) for directories
+ *              (including . and ..),
+ *              1 for files)
+ * - st_size: (supported only for files, where it is the real file size)
+ * - st_atim
+ * - st_mtim
+ */
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
                           gid_t gid, const char *path, struct stat *stbuf);
 
