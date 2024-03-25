@@ -214,12 +214,25 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr);
 
-/// @brief 
-/// @param fsptr 
-/// @param fssize 
-/// @param errnoptr 
-/// @param path 
-/// @return 
+/**
+ * @brief (6) Implements an emulation of the mknod system call for regular files
+ *        on the filesystem of size fssize pointed to by fsptr.
+ *
+ * This function is called only for the creation of regular files.
+ * If a file gets created, it is of size zero and has default
+ * ownership and mode bits.
+ * The call creates the file indicated by path.
+ *
+ * On success, 0 is returned.
+ * On failure, -1 is returned and *errnoptr is set appropriately.
+ * The error codes are documented in man 2 mknod.
+ *
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param fssize Size of the filesystem.
+ * @param errnoptr Pointer to store the error code in case of failure.
+ * @param path Path to the file to be created.
+ * @return 0 on success, -1 on failure.
+ */ 
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path);
 

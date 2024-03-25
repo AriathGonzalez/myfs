@@ -709,27 +709,88 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   return num_entries;    // Return number of names
 }
 
-/* Implements an emulation of the mknod system call for regular files
-   on the filesystem of size fssize pointed to by fsptr.
-
-   This function is called only for the creation of regular files.
-
-   If a file gets created, it is of size zero and has default
-   ownership and mode bits.
-
-   The call creates the file indicated by path.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 mknod.
-
-*/
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  /* STUB */
-  return -1;
+  superblock_t *sb;
+  inode_t *node, *child;
+  char *file_name, *directory_path;
+  size_t directory_length, num_children;
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+
+  sb = mount_filesystem(fsptr, fssize);
+  if (sb == NULL){
+      *errnoptr = EFAULT;
+      return -1;
+  }
+  
+  // Check for available memory
+  if (((size_t) sizeof(inode_t)) > get_max_free_size(sb)) {
+      *errnoptr = ENOMEM;
+      return -1;          
+  }
+
+  // Extract file name and directory path
+  file_name = strchr(path, '/') + 1;
+  directory_length = strlen(path) - strlen(file_name);
+  if (strlen(file_name) >= NAME_MAX_LEN){
+      *errnoptr = ENAMETOOLONG;
+      return -1;
+  }
+
+  directory_path = (char *) malloc((directory_length + 1) * sizeof(char));
+  if (directory_path == NULL){
+      *errnoptr = ENOMEM;
+      return -1;
+  }
+
+  // Copy directory part of path to directory_path buffer
+  strncpy(directory_path, path, directory_length);
+  directory_path[directory_length] = '\0';
+
+  node = path_resolve(sb, directory_path);
+  if (node == NULL){    // Directory does not exist
+      free(directory_path);
+      *errnoptr = ENOENT;
+      return -1;
+  }
+
+  // Increment number of children in directory
+  node->value.directory.num_children++;
+  num_children = node->value.directory.num_children;
+
+  // Allocate memory for child nodes
+  if (num_children == 1){
+      // One child, allocate memory for children array
+      node->value.directory.children = allocate_memory(sb, ((size_t) sizeof(inode_t)));
+      if (node->value.directory.children == (offset) 0){    // Allocation fail
+            *errnoptr = ENOMEM;
+            return -1;
+      }
+  }
+  else {
+      // If directory already has more than 1 child, reallocate memory for the children array
+      // to accomodate new child
+      node->value.directory.children = reallocate_memory(sb,
+      node->value.directory.children, num_children * ((size_t) sizeof(inode_t)));
+      if (node->value.directory.children == (offset) 0){    // Allocation fail
+            *errnoptr = ENOMEM;
+            return -1;
+      }
+  }
+
+  // Set up child node (regular file)
+  child = (inode_t *) offset_to_pointer(sb, (node->value.directory.children + (num_children - 1) * ((size_t) sizeof(inode_t)))); 
+
+  strcpy(child->name, file_name);
+  child->type = 1;
+  child->time[0] = ts;
+  child->time[1] = ts;
+  child->value.file.size = (size_t) 0;
+  child->value.file.first_block = (offset) 0;
+
+  free(directory_path);
+  return 0;
 }
 
 /* Implements an emulation of the unlink system call for regular files
