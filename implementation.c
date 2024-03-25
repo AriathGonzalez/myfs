@@ -657,46 +657,56 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
   return 0;
 }
 
-/* Implements an emulation of the readdir system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   If path can be followed and describes a directory that exists and
-   is accessable, the names of the subdirectories and files 
-   contained in that directory are output into *namesptr. The . and ..
-   directories must not be included in that listing.
-
-   If it needs to output file and subdirectory names, the function
-   starts by allocating (with calloc) an array of pointers to
-   characters of the right size (n entries for n names). Sets
-   *namesptr to that pointer. It then goes over all entries
-   in that array and allocates, for each of them an array of
-   characters of the right size (to hold the i-th name, together 
-   with the appropriate '\0' terminator). It puts the pointer
-   into that i-th array entry and fills the allocated array
-   of characters with the appropriate name. The calling function
-   will call free on each of the entries of *namesptr and 
-   on *namesptr.
-
-   The function returns the number of names that have been 
-   put into namesptr. 
-
-   If no name needs to be reported because the directory does
-   not contain any file or subdirectory besides . and .., 0 is 
-   returned and no allocation takes place.
-
-   On failure, -1 is returned and the *errnoptr is set to 
-   the appropriate error code. 
-
-   The error codes are documented in man 2 readdir.
-
-   In the case memory allocation with malloc/calloc fails, failure is
-   indicated by returning -1 and setting *errnoptr to EINVAL.
-
-*/
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
-  /* STUB */
-  return -1;
+  superblock_t *sb;
+  inode_t *node, *child;
+  char **names;
+  size_t num_entries;
+
+  sb = mount_filesystem(fsptr, fssize);
+  if (sb == NULL){
+      *errnoptr = EFAULT;
+      return -1;
+  }
+
+  node = path_resolve(sb, path);
+  if (node == NULL){
+      *errnoptr = ENOENT;
+      return -1;
+  }
+
+  // Get the number of children (subdirectories and files) in the directory
+  num_entries = node->value.directory.num_children;
+  if (num_entries == (size_t) 0){
+      return 0;   // No entries in the directory
+  }
+
+  // Allocate memory for storing names
+  names = (char **) calloc(num_entries, sizeof(char *));
+  if (names == NULL){
+      *errnoptr = ENOMEM;
+      return -1;
+  }
+
+  // Allocate memory for each name and store them in the names array
+  for (size_t i = 0; i < num_entries; i++){
+      child = ((inode_t *) offset_to_pointer(sb, (node->value.directory.children + i * ((size_t) sizeof(inode_t)))));
+      names[i] = (char *) calloc(strlen(child->name), sizeof(char));
+
+      if (names[i] == NULL){
+            // Free allocated memory on failure
+            for (size_t j = 0; j < i; j++){
+                  free(names[j]);
+            }
+            free(names);
+            *errnoptr = EINVAL;
+            return -1;
+      }
+      strcpy(names[i], child->name);      // Copy the name into the allocated memory
+  }
+  *namesptr = names;    // Set output pointer to array of names
+  return num_entries;    // Return number of names
 }
 
 /* Implements an emulation of the mknod system call for regular files

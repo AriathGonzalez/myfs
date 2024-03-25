@@ -168,13 +168,49 @@ inode_t *path_resolve (superblock_t *sb, const char *path);
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
                           gid_t gid, const char *path, struct stat *stbuf);
 
-/// @brief 
-/// @param fsptr 
-/// @param fssize 
-/// @param errnoptr 
-/// @param path 
-/// @param namesptr 
-/// @return 
+/**
+ * @brief (5) Implements an emulation of the readdir system call on the filesystem 
+ *        of size fssize pointed to by fsptr. 
+ *
+ * If path can be followed and describes a directory that exists and
+ * is accessible, the names of the subdirectories and files 
+ * contained in that directory are output into *namesptr. The . and ..
+ * directories must not be included in that listing.
+ *
+ * If it needs to output file and subdirectory names, the function
+ * starts by allocating (with calloc) an array of pointers to
+ * characters of the right size (n entries for n names). Sets
+ * *namesptr to that pointer. It then goes over all entries
+ * in that array and allocates, for each of them an array of
+ * characters of the right size (to hold the i-th name, together 
+ * with the appropriate '\0' terminator). It puts the pointer
+ * into that i-th array entry and fills the allocated array
+ * of characters with the appropriate name. The calling function
+ * will call free on each of the entries of *namesptr and 
+ * on *namesptr.
+ *
+ * The function returns the number of names that have been 
+ * put into namesptr. 
+ *
+ * If no name needs to be reported because the directory does
+ * not contain any file or subdirectory besides . and .., 0 is 
+ * returned and no allocation takes place.
+ *
+ * On failure, -1 is returned and the *errnoptr is set to 
+ * the appropriate error code. 
+ *
+ * The error codes are documented in man 2 readdir.
+ *
+ * In the case memory allocation with malloc/calloc fails, failure is
+ * indicated by returning -1 and setting *errnoptr to EINVAL.
+ *
+ * @param fsptr Pointer to the start of the filesystem
+ * @param fssize Size of the filesystem
+ * @param errnoptr Pointer to store error code in case of failure
+ * @param path Path of the directory to read
+ * @param namesptr Pointer to store the array of directory and file names
+ * @return The number of names read on success, 0 if no entries, -1 on failure
+ */
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr);
 
