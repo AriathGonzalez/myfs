@@ -42,8 +42,6 @@
 #include <stdio.h>
 
 #include "implementation.h"
-#include <linux/time.h>
-
 
 /* The filesystem you implement must support all the 13 operations
    stubbed out below. There need not be support for access rights,
@@ -237,423 +235,568 @@
 
 */
 
-/* Helper types and functions */
+/* (2) START memory allocation implementation */
+
+void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block) {
+    data_block_t *current_block;
+    offset current_offset = ll->head;
+    offset new_block_offset = pointer_to_offset(fsptr, new_block);
+
+    // Check if the new allocation comes before the first space in the linked list
+    if (current_offset > new_block_offset) {
+        // Update the head of the linked list
+        ll->head = new_block_offset;
+
+        // Check if we can merge the new allocation with the first space in the linked list
+        if ((new_block_offset + sizeof(size_t) + new_block->remaining) == current_offset) {
+            // Merge the spaces
+            current_block = offset_to_pointer(fsptr, current_offset);
+            new_block->remaining += sizeof(size_t) + current_block->remaining;
+            new_block->next = current_block->next;
+        } else {
+            // Couldn't merge, so just add it as the first space and update pointers
+            new_block->next = current_offset;
+        }
+    } else {
+        // Find the position to insert the new allocation
+        current_block = offset_to_pointer(fsptr, current_offset);
+        
+        // Get the last block that is in lower memory than the new allocation
+        while ((current_block->next != 0) && (current_block->next < new_block_offset)) {
+            current_block = offset_to_pointer(fsptr, current_block->next);
+        }
+        
+        current_offset = pointer_to_offset(fsptr, current_block);
+
+        // Check if we can merge the new allocation with the next space
+        offset next_block_offset = current_block->next;
+        if (next_block_offset != 0) {
+            if ((new_block_offset + sizeof(size_t) + new_block->remaining) == next_block_offset) {
+                data_block_t *next_block = offset_to_pointer(fsptr, next_block_offset);
+                new_block->remaining += sizeof(size_t) + next_block->remaining;
+                new_block->next = next_block->next;
+            } else {
+                new_block->next = next_block_offset;
+            }
+        } else {
+            new_block->next = 0;
+        }
+
+        // Check if we can merge the new allocation with the previous space
+        if ((current_offset + sizeof(size_t) + current_block->remaining) == new_block_offset) {
+            current_block->remaining += sizeof(size_t) + new_block->remaining;
+            current_block->next = new_block->next;
+        } else {
+            current_block->next = new_block_offset;
+        }
+    }
+}
+
+void extend_avail_block(void *fsptr, data_block_t *before_avail,
+                        data_block_t *org_avail, offset avail_off,
+                        size_t *size) {
+    data_block_t *avail = off_to_ptr(fsptr, avail_off);
+    data_block_t *temp;
+
+    // Check if all size bytes can be accommodated in the available block
+    if (avail->remaining >= *size) {
+        // Check if an AllocateFrom object can be created with the remaining space
+        if (avail->remaining > *size + sizeof(data_block_t)) {
+            // Create a new AllocateFrom object
+            temp = ((void *)avail) + *size;
+            temp->remaining = avail->remaining - *size;
+            temp->next = avail->next;
+
+            // Update original available block with final total size
+            org_avail->remaining += *size;
+
+            // Update pointers to add temp into the list of free blocks
+            before_avail->next = avail_off + *size;
+        }
+        // Not enough space to create a new AllocateFrom object
+        else {
+            // Add the entire remaining space of the available block to the original one
+            org_avail->remaining += avail->remaining;
+
+            // Update pointers to skip the available block
+            before_avail->next = avail->next;
+        }
+        // Reset size as all space is allocated from the available block
+        *size = 0;
+    }
+    // Not enough space in the available block, allocate as much as possible
+    else {
+        // Add the entire remaining space of the available block to the original one
+        org_avail->remaining += avail->remaining;
+
+        // Update pointers to skip the available block
+        before_avail->next = avail->next;
+
+        // Update size to reflect the amount of space allocated from the available block
+        *size -= avail->remaining;
+    }
+}
+
+void *get_memory_block(void *fsptr, list_t *ll, data_block_t *selected_block,
+                     size_t *size) {
+    offset selected_block_offset = 0;  // Offset for the selected space
+    offset before_current_offset;  // Offset before the current space
+    data_block_t *before_current_block;  // Pointer to the block before the current space
+    offset current_offset;  // Offset of the current space
+    data_block_t *current_block;  // Pointer to the current space
+    data_block_t *before_largest_block = NULL;  // Pointer to the block before the largest block
+    offset largest_offset;  // Offset of the largest block
+    data_block_t *largest_block;  // Pointer to the largest block
+    size_t largest_size;  // Size of the largest block
+    data_block_t *allocated_block = NULL;  // Pointer to the allocated memory block
+
+    before_current_offset = ll->head;
+
+    // If no space is available, return NULL
+    if (!before_current_offset) {
+        return NULL;
+    }
+
+    // Ensure the minimum size is sizeof(data_block_t)
+    if (*size < sizeof(data_block_t)) {
+        *size = sizeof(data_block_t);
+    }
+
+    // Check if a selected space is specified
+    if (selected_block != fsptr) {
+        // Calculate the offset for the selected space
+        selected_block_offset = pointer_to_offset(fsptr, selected_block) + sizeof(size_t) + selected_block->remaining;
+        // If the selected space is at the head of the list, extend it
+        if (selected_block_offset == before_current_offset) {
+            extend_avail_block(fsptr, ((void *)ll) - sizeof(size_t), selected_block, selected_block_offset, size);
+            if (*size == 0) {
+                return NULL;
+            }
+        }
+    }
+
+    // Initialize the largest block to the first available block
+    before_current_offset = ll->head;
+    before_current_block = offset_to_pointer(fsptr, before_current_offset);
+    largest_offset = before_current_offset;
+    largest_block = before_current_block;
+    largest_size = before_current_block->remaining;
+    current_offset = before_current_block->next;
+
+    // Iterate through the list to find the largest available block
+    while (current_offset != 0) {
+        current_block = offset_to_pointer(fsptr, current_offset);
+        if ((selected_block_offset == current_offset) || (current_block->remaining > largest_size)) {
+            if (selected_block_offset == current_offset) {
+                extend_avail_block(fsptr, before_current_block, selected_block, selected_block_offset, size);
+                if (*size == 0) {
+                    break;
+                }
+            } else {
+                before_largest_block = before_current_block;
+                largest_offset = current_offset;
+                largest_block = current_block;
+                largest_size = current_block->remaining;
+            }
+        }
+        before_current_offset = current_offset;
+        before_current_block = current_block;
+        current_offset = current_block->next;
+    }
+
+    // Allocate memory from the largest block
+    if ((*size != 0) && (largest_block != NULL)) {
+        allocated_block = largest_block;
+        if (largest_block->remaining >= *size) {
+            if (largest_block->remaining > *size + sizeof(data_block_t)) {
+                data_block_t *temp_block = ((void *)largest_block) + sizeof(size_t) + *size;
+                temp_block->remaining = largest_block->remaining - *size - sizeof(size_t);
+                temp_block->next = largest_block->next;
+                if (before_largest_block == NULL) {
+                    ll->head = largest_offset + *size + sizeof(size_t);
+                } else {
+                    before_largest_block->next = largest_offset + *size + sizeof(size_t);
+                }
+                allocated_block->remaining = *size;
+            } else {
+                if (before_largest_block != NULL) {
+                    before_largest_block->next = largest_block->next;
+                } else {
+                    ll->head = 0;  // The system is out of memory
+                }
+            }
+            *size = 0;
+        } else {
+            if (before_largest_block == NULL) {
+                // The system has used all available memory and still not enough
+                return NULL;
+            } else {
+                before_largest_block->next = largest_block->next;
+                *size -= largest_block->remaining;
+            }
+        }
+    }
+
+    // Return the allocated memory block
+    if (allocated_block == NULL) {
+        return NULL;
+    }
+    return ((void *)allocated_block) + sizeof(size_t);  // Adjust pointer to skip the size_t header
+}
+
+void *malloc_impl(void *fsptr, void *selected_ptr, size_t *size) {
+    // If size is zero, return NULL
+    if (*size == 0) {
+        return NULL;
+    }
+
+    // If selected pointer is NULL, set it to the beginning of the file system
+    if (selected_ptr == NULL) {
+        selected_ptr = fsptr + sizeof(size_t);
+    }
+
+    // Call get_memory_block to allocate memory block
+    return get_memory_block(fsptr, get_free_memory_pointer(fsptr),
+                            selected_ptr - sizeof(size_t), size);
+}
+
+void *realloc_impl(void *fsptr, void *orig_ptr, size_t *size) {
+    // If size is 0, free the original pointer and return NULL
+    if (*size == 0) {
+        free_impl(fsptr, orig_ptr);
+        return NULL;
+    }
+
+    list_t *ll = get_free_memory_pointer(fsptr);
+
+    // If orig_ptr is NULL, allocate memory equivalent to a call to malloc(size)
+    if (orig_ptr == NULL) {
+        // Allocate memory with malloc for size bytes
+        return get_memory_block(fsptr, ll, fsptr, size);
+    }
+
+    // Calculate the data block pointer
+    data_block_t *alloc = (data_block_t *)((void *)orig_ptr - sizeof(size_t));
+    data_block_t *temp;
+    void *new_ptr = NULL;
+
+    // If the new size is less than the original size but not enough to create a new memory block
+    if ((alloc->remaining >= *size) && (alloc->remaining < (*size + sizeof(data_block_t)))) {
+        // Keep the original memory block
+        new_ptr = orig_ptr;
+    }
+    // If the new size is less than the original size and enough to create a new memory block
+    else if (alloc->remaining > *size) {
+        // Create a new memory block for the remaining memory
+        temp = (data_block_t *)(orig_ptr + *size);
+        temp->remaining = alloc->remaining - *size - sizeof(size_t);
+        temp->next = 0;  // Offset of zero
+        add_to_free_memory(fsptr, ll, temp);
+        // Update the remaining space
+        alloc->remaining = *size;
+        // Keep the original memory block
+        new_ptr = orig_ptr;
+    }
+    // If the new size is greater than the original size
+    else {
+        // Allocate a new memory block
+        new_ptr = get_memory_block(fsptr, ll, fsptr, size);
+        // Check if memory allocation failed
+        if (*size == 0) {
+            return NULL;
+        }
+        // Copy contents of the original memory block to the new memory block
+        memcpy(new_ptr, orig_ptr, alloc->remaining);
+        // Free the original memory block
+        add_to_free_memory(fsptr, ll, alloc);
+    }
+
+    return new_ptr;
+}
+
+void free_impl(void *fsptr, void *ptr) {
+    // If ptr is NULL, do nothing
+    if (ptr == NULL) {
+        return;
+    }
+
+    // Adjust ptr by size_t to start on the size of pointer
+    add_to_free_memory(fsptr, get_free_memory_pointer(fsptr), ptr - sizeof(size_t));
+}
+
+/* (2) END memory allocation implementation*/
 
 /* YOUR HELPER FUNCTIONS GO HERE */
 
-static inline offset pointer_to_offset (void *pointer, void *fsptr) {   
-      if (pointer < fsptr){
+offset pointer_to_offset (void *fsptr, void *pointer) {   
+      if (fsptr > pointer){
             return 0;   // Pointer is before the start of the file system
       }
       return (offset) (pointer - fsptr);  // Calculate offset
 }
 
-static inline void *offset_to_pointer (void *pointer, offset my_offset){
-      if (my_offset == 0){
-            return NULL;      // Offset is 0, return NULL pointer
-      }
-      return (void *) (pointer + my_offset);    // Calculate pointer
-}
-
-superblock_t *mount_filesystem (void *fsptr, size_t fssize){
-      superblock_t *sb = (superblock_t *) fsptr;      // superblock pointer
-      data_block_t *db; // data block pointer
-      size_t s;   
-
-      if (fssize < sizeof(superblock_t)){
-            return NULL;      // File system size is too small to contain superblock
-      }
-
-      // Check if magic number is set, indicating an already mounted file system
-      if (sb->magic_number != MAGIC_NUMBER){
-            // Will be the size of file system - size of super block
-            s = (fssize - (sizeof(superblock_t)));    // Calculate available size for data blocks
-
-            // Initialize file system
-            if (sb->magic_number != ((uint32_t) 0)){
-                  // File the rest ofo the file system with 0s
-                  memset((fsptr + sizeof(superblock_t)), 0, s);
-            }
-            sb->magic_number = MAGIC_NUMBER;
-            sb->size = s;
-
-            if (s == ((size_t) 0)){
-                  sb->free_memory = ((offset) 0);     // No space available, set free memory to 0
-            }
-            else {
-                  // Calculate pointer to first data block (will be the start of file system + size of superblock)
-                  db = (data_block_t *) offset_to_pointer(fsptr, sizeof(superblock_t));   
-                  db->total_size = s;     // Set total size of data block
-                  db->next = (offset) 0;  // Set the next pointer of the data block to 0
-                  // Set free memory offset relative to the start of the file system
-                  sb->free_memory = pointer_to_offset(fsptr, db); // We just lost memory with data block
-            }
-            sb->root_directory = (offset) 0;    // Initialize root directory offset
-      }
-      return sb;  // Return mounted superblock
-}
-
-size_t free_memory_size (superblock_t *sb){
-      size_t total_free_size;
-      data_block_t *db;
-
-      total_free_size = (size_t) 0; 
-
-      /*
-      Go through each data block in linked list, adding up their size to get
-      total free size.
-      Initialization: Starting from first data block in linked list.
-      Condition:  while not null
-      Update: Point db to the next data block in linked list using offset
-      */
-      for (db = (data_block_t *) offset_to_pointer(sb, sb->free_memory);
-           db != NULL; 
-           db = (data_block_t *) (offset_to_pointer(sb, db->next))){
-                  total_free_size += db->total_size;
-      }
-      
-      return total_free_size;
-}
-
-data_block_t *get_memory_block(superblock_t *sb, size_t size){
-      data_block_t *curr, *prev, *next;
-
-      for (curr = (data_block_t *) offset_to_pointer(sb, sb->free_memory), prev = NULL;
-           curr != NULL && curr->next != (offset) 0;
-           prev = curr, curr = (data_block_t *) offset_to_pointer(sb, curr->next)){
-            if (curr->total_size > size){
-                  break;      // Found a block that can accomodate size
-            }
-      }
-      
-      // No suitable block found, return NULL
-      if (curr->total_size < size){
-            return NULL;
-      }
-
-      // If allocated space is larger than requested size,
-      // split the block and adjust pointers
-      if (curr->total_size - size > (size_t) 0){
-            next = (data_block_t *) offset_to_pointer(curr, size);
-            next->total_size = curr->total_size - size;
-            next->next = curr->next;      // Inherit the rest of the free memory
-      } 
-      else {
-            next = (data_block_t *) offset_to_pointer(sb, curr->next);
-      }
-
-      // If the current block is the first block in the free memory pool,
-      // update the superblock's free memory pointer
-      if (curr == (data_block_t *) offset_to_pointer(sb, sb->free_memory)){
-            sb->free_memory = pointer_to_offset(next, sb);
-      }
-      else {
-            prev->next = pointer_to_offset(next, sb);
-      }
-      curr->total_size = size;
-      curr->next = (offset) 0;
-
-      return curr;
-}
-
-void add_to_free_memory (superblock_t *sb, offset my_offset){
-      data_block_t *db, *curr, *prev;
-      db = (data_block_t *) offset_to_pointer(sb, my_offset);     // Get pointer to data block
-
-      // Iterate through linked list of data blocks
-      for (curr = (data_block_t *) offset_to_pointer(sb, sb->free_memory), prev = NULL;
-           curr != NULL;
-           prev = curr, curr = (data_block_t *) offset_to_pointer(sb, curr->next)){
-            
-            // Check if current data block should be placed before the new block
-            if ((void *) db < (void *) curr){
-                  break;
-            }
-      }
-      
-      // Place the new block in between prev and curr block
-      if (curr != NULL){
-            db->next = pointer_to_offset(curr, sb);
-      }
-      else {
-            db->next = (offset) 0;
-      }
-
-      // Update the next pointer of the previous block or superblock
-      if (prev == NULL){
-            sb->free_memory = my_offset;
-      }
-      else {
-            prev->next = my_offset;
-      }
-
-      // Merge adjacent data blocks if they are contiguous (coalesce)
-      if (curr != NULL && ((void *) ((void *) db + db->total_size)) == ((void *) curr)) {
-            db->total_size += curr->total_size;
-            db->next = curr->next;
-      }
-
-      if (prev != NULL && ((void *) ((void *) prev + prev->total_size)) == ((void *) db)) {
-            prev->total_size += db->total_size;
-            prev->next = db->next;
-      }
-}
-
-void free_impl (superblock_t *sb, offset my_offset){
-      void *pointer;    // Pointer to adjust the offset of the data block
-
-      // Adjust the offset to account for the metadata (data_block_t struct)
-      // Decrementing a data block
-      pointer = (((void *) offset_to_pointer(sb, my_offset)) - ((size_t) sizeof(data_block_t))); 
-      
-      // Convert the adjusted pointer back to an offset
-      offset new_offset = pointer_to_offset(pointer, sb);
-
-      // Add the data block to the free memory pool
-      add_to_free_memory(sb, new_offset);
-}
-
-offset allocate_memory (superblock_t *sb, size_t size){
-      size_t s;   // Adjusted size of the data block
-      void *pointer;    // Pointer to the allocated memory block
-
-      // If size is 0, no allocation
-      if (size == ((size_t) 0)){
-            return (offset) 0;
-      }
-
-      // Calculate the adjusted size of the data block considering metadata
-      s = (size + (size_t) sizeof(data_block_t));
+void *offset_to_pointer (void *fsptr, offset my_offset){
+      void *pointer = fsptr + my_offset;
 
       // Check for overflow
-      if (s < size){
-            return (offset) 0;
+      if (pointer < fsptr){
+            return NULL;      
       }
-
-      // Get a data block from free memory pool
-      pointer = ((void *) get_memory_block(sb, s));
-
-      // If data block allocation successful, return its offset
-      if (pointer != NULL){
-            return pointer_to_offset((pointer + (size_t) sizeof(data_block_t)), sb);
-      }
-
-      // Memory block allocations fails
-      return (offset) 0;
+      return pointer;
 }
 
-offset reallocate_memory (superblock_t *sb, offset my_offset, size_t size){
-      data_block_t *old_db;   // Pointer to the metadata to old data block
-      offset new_offset;      // Offset of the new data block
-      void *old_pointer, *new_db;   // Pointers to old and new data blocks
-      size_t s;
-
-      // Check for NULL superblock
-      if (sb == NULL){
-            return (offset) 0;
-      }
-      // Check for NULL offset
-      if (my_offset == (offset) 0){
-            return (offset) 0;
-      }
-      // If new size is 0, free the data block and return 0
-      if (size == (size_t) 0){
-            free_impl(sb, my_offset);
-            return (offset) 0;
-      }
-
-      // Allocate memory for new data block w/ specified size
-      new_offset = allocate_memory(sb, size);
-      if (new_offset == (offset) 0){
-            return (offset) 0;      // Allocation failed
-      }
-
-      // Get pointer to old data block and its metadata
-      old_pointer = offset_to_pointer(sb, my_offset);
-      old_db = (data_block_t *) (old_pointer - (size_t) sizeof(data_block_t));
-
-      // Determine the size to copy from old to new data block
-      s = old_db->total_size;
-      if (size < s){
-            s = size;
-      }
-
-      new_db = offset_to_pointer(sb, new_offset);     // Get pointer to new data block
-      memcpy(new_db, old_pointer, s);     // Copy from old to new data block
-      free_impl(sb, my_offset);     // Free old data block
-
-      // Return offset of reallocated memory block
-      return new_offset;
+void *get_free_memory_pointer(void *fsptr) {
+  return &((superblock_t *)fsptr)->free_memory;
 }
 
-size_t get_max_free_size (superblock_t *sb){
-      data_block_t *db;
-      size_t max_free_size;
+void update_time(inode_t *node, int set_mod) {
+    // If node is NULL, do nothing
+    if (node == NULL) {
+        return;
+    }
 
-      max_free_size = (size_t) 0;
+    // Get current time
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        // Update access time
+        node->time[0] = ts;
 
-      for (db = (data_block_t *) offset_to_pointer(sb, sb->free_memory);
-           db != NULL;
-           db = (data_block_t *) (offset_to_pointer(sb, db->next))){
+        // Update modification time if set_mod is non-zero
+        if (set_mod) {
+            node->time[1] = ts;
+        }
+    }
+}
 
-            if (db->total_size > max_free_size){
-                  max_free_size = db->total_size;
+void mount_filesystem(void *fsptr, size_t fssize) {
+    superblock_t *sb = (superblock_t *)fsptr;
+
+    // If this is the first mount, initialize the superblock
+    if (sb->magic_number != MAGIC_NUMBER) {
+        // Set general stats
+        sb->magic_number = MAGIC_NUMBER;
+        sb->size = fssize;
+
+        // Save space for the root directory
+        sb->root_directory = sizeof(superblock_t); // Store only the offset
+        inode_t *root = off_to_ptr(fsptr, sb->root_directory);
+
+        // Set up the root directory
+        memset(root->name, '\0', NAME_MAX_LEN + 1); // Fill name with null characters
+        memcpy(root->name, "/", strlen("/")); // Copy name "/" into node->name
+        update_time(root, 1); // Update access and modification times
+        root->type = 2; // Set node type to directory
+        inode_directory_t *dict = &root->value.directory;
+        dict->num_children = 1; // Set number of children (including "..")
+
+        // Set up root's children
+        size_t *children_size = offset_to_pointer(fsptr, sb->root_directory + sizeof(inode_t));
+        *children_size = 4 * sizeof(offset); // Set size of children array header
+        dict->children = pointer_to_offset(fsptr, (void *)children_size + sizeof(size_t));
+        offset *ptr = offset_to_pointer(fsptr, dict->children);
+        *ptr = 0; // Set parent of root to null
+
+        // Set the pointer to the first free block
+        sb->free_memory = dict->children + *children_size;
+        list_t *ll = get_free_memory_pointer(fsptr);
+        data_block_t *fb = offset_to_pointer(fsptr, ll->head);
+
+        // Initialize remaining free space
+        fb->remaining = fssize - sb->free_memory - sizeof(size_t);
+        memset((void *)fb + sizeof(size_t), 0, fb->remaining); // Fill free space with zeros
+    }
+}
+
+char *get_last_token(const char *path, unsigned long *token_len) {
+    unsigned long path_len = strlen(path);
+    unsigned long last_slash_index;
+
+    // Find the last '/' in the path
+    for (last_slash_index = path_len - 1; last_slash_index > 0; last_slash_index--) {
+        if (path[last_slash_index] == '/') {
+            break;
+        }
+    }
+
+    // Adjust index to start after the last '/'
+    last_slash_index++;
+
+    // Calculate the length of the last token
+    *token_len = path_len - last_slash_index;
+
+    // Allocate memory for the last token
+    char *last_token = (char *)malloc((*token_len + 1) * sizeof(char));
+
+    // Check if memory allocation was successful
+    if (last_token == NULL) {
+        return NULL;
+    }
+
+    // Copy the last token from the path
+    strncpy(last_token, &path[last_slash_index], *token_len);
+    last_token[*token_len] = '\0'; // Add null terminator
+
+    return last_token;
+}
+
+char **tokenize(const char token, const char *path, int skip_n_tokens) {
+    int num_tokens = 0;
+
+    // Count the number of tokens in the path
+    for (const char *c = path; *c != '\0'; c++) {
+        if (*c == token) {
+            num_tokens++;
+        }
+    }
+
+    // Adjust the number of tokens to skip
+    num_tokens -= skip_n_tokens;
+
+    // Allocate memory for the tokens array
+    char **tokens = (char **)malloc(((size_t)(num_tokens + 1)) * sizeof(char *));
+    if (tokens == NULL) {
+        return NULL; // Memory allocation failed
+    }
+
+    const char *start = path + 1; // Skip the first character which is '/'
+    const char *end = start;
+    char *token_ptr;
+
+    // Populate the tokens array
+    for (int i = 0; i < num_tokens; i++) {
+        while ((*end != token) && (*end != '\0')) {
+            end++;
+        }
+
+        // Allocate memory for the token string
+        token_ptr = (char *)malloc(((size_t)(end - start) + 1) * sizeof(char));
+        if (token_ptr == NULL) {
+            // Memory allocation failed, free previously allocated memory and return NULL
+            for (int j = 0; j < i; j++) {
+                free(tokens[j]);
             }
-      }
-      return max_free_size;
-}
-
-inode_t *path_resolve (superblock_t *sb, const char *path){
-      char *index, *path_copy, *name, file_name[NAME_MAX_LEN];
-      inode_t *node, *child;
-      size_t size, i;
-
-      // If root directory is not initialized, create it
-      if (sb->root_directory == (offset) 0){
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-
-            // Allocate memory for the root directory inode
-            sb->root_directory = allocate_memory(sb, ((size_t) sizeof(inode_t)));
-
-            // Obtain pointer to root inode
-            inode_t *root = (inode_t *) offset_to_pointer(sb, sb->root_directory);
-
-            // Initialize root inode properties
-            root->name[0] = '/';
-            root->name[1] = '\0';
-            root->type = 2;
-            root->time[0] = ts;     // Last access time
-            root->time[1] = ts;     // Last modified time
-            root->value.directory.num_children = (size_t) 0;
-            root->value.directory.children = (offset) 0;
-      }
-
-      // Get pointer to node
-      node = (inode_t *) offset_to_pointer(sb, sb->root_directory);
-
-      // Check if path is root
-      if (strcmp("/\0", path) == 0){
-            return node;
-      }
-
-      // Copy path to a new buffer
-      path_copy = (char *) malloc((strlen(path) + 1) * sizeof(char));
-      if (path_copy == NULL){
+            free(tokens);
             return NULL;
-      }
-      strcpy(path_copy, path);
+        }
 
-      // Extract individual directory names from the path
-      name = path_copy + 1;   // pointer to 1 char after path (skipping '/')
-      index = strchr(name, '/');    // Get 1st occurrence of '/' in string pointed to by name
+        // Copy the token string
+        memcpy(token_ptr, start, ((size_t)(end - start)));
+        token_ptr[end - start] = '\0'; // Null-terminate the token string
+        tokens[i] = token_ptr;
+        start = ++end;
+    }
 
-      // Traverse the directory structure to resolve the path
-      while (strlen(name) != 0){
-            child = NULL;
-            if (index != NULL){
-                  // Size is the number of characters in current directory name
-                  size = (size_t)  (((void *) index) - ((void *) name));
-            }
-            else {
-                  size = (size_t) strlen(name);
-            }
-            strncpy(file_name, name, size);     // Extract current directory name    
-            file_name[size] = '\0';
+    // Null-terminate the tokens array
+    tokens[num_tokens] = NULL;
 
-            // Iterate through children of the current node to find the matching child
-            for (i = 0; i < node->value.directory.num_children; i++){
-                  child = (inode_t *) offset_to_pointer(sb, (node->value.directory.children + i * ((size_t) sizeof(inode_t))));
-                  if (strcmp(child->name, file_name) == 0){
-                        node = child;
-                        break;
-                  }
-            }
+    return tokens;
+}
 
-            memset(file_name, 0, size);   // Clear buffer
+void free_tokens(char **tokens) {
+  for (char **p = tokens; *p; p++) free(*p);
+  free(tokens);
+}
 
-            // If child not found or node is not in directory, return NULL
-            if (node != child){
-                  free(path_copy);
-                  return NULL;
+inode_t *get_node(void *fsptr, inode_directory_t *dict, const char *child) {
+    size_t num_children = dict->num_children;
+    offset *children_offsets = offset_to_pointer(fsptr, dict->children);
+    inode_t *node = NULL;
+
+    // Check if the child node is the parent directory
+    if (strcmp(child, "..") == 0) {
+        // Return the inode of the parent directory
+        return (inode_t *)offset_to_pointer(fsptr, children_offsets[0]);
+    }
+
+    // Iterate through the child nodes to find the specified one
+    for (size_t i = 1; i < num_children; i++) {
+        node = (inode_t *)offset_to_pointer(fsptr, children_offsets[i]);
+        if (strcmp(node->name, child) == 0) {
+            // Child node found, return its inode
+            return node;
+        }
+    }
+
+    // Child node not found
+    return NULL;
+}
+
+inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
+    // Check if the path starts at the root directory
+    if (*path != '/') {
+        return NULL;
+    }
+
+    // Get the inode of the root directory
+    inode_t *node = off_to_ptr(fsptr, ((superblock_t *)fsptr)->root_directory);
+
+    // If the path is just "/", return the root directory inode
+    if (path[1] == '\0') {
+        return node;
+    }
+
+    // Break the path into tokens
+    char **tokens = tokenize('/', path, skip_n_tokens);
+
+    // Traverse the path tokens
+    for (char **token = tokens; *token; token++) {
+        // Files cannot have children
+        if (node->type == 1) {
+            free_tokens(tokens);
+            return NULL;
+        }
+
+        // If the token is ".", stay on the same directory
+        if (strcmp(*token, ".") != 0) {
+            node = get_node(fsptr, &node->value.directory, *token);
+            // Check if the child node was successfully retrieved
+            if (node == NULL) {
+                free_tokens(tokens);
+                return NULL;
             }
-            if (index == NULL){
-                  break;
-            }
-            name = index + 1; // Start at beginning of next directory
-            index = strchr(name, '/');    // another '/'
-      }
-      free(path_copy);
-      return node;
+        }
+    }
+
+    free_tokens(tokens);
+
+    return node;
 }
 
 /* End of helper functions */
 
-int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          uid_t uid, gid_t gid,
-                          const char *path, struct stat *stbuf) {
-  superblock_t *sb;
-  inode_t *node;
-  char *file_name;
-  int subdirectory_count;
-  size_t i;
+int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
+                          gid_t gid, const char *path, struct stat *stbuf) {
+  handler(fsptr, fssize);
 
-  sb = mount_filesystem(fsptr, fssize);
+  node_t *node = path_solver(fsptr, path, 0);
 
-  // Check if mount successful
-  if (sb == NULL){
-      *errnoptr = EFAULT;
-      return -1;
+  // Path could not be solved
+  if (node == NULL) {
+    *errnoptr = ENOENT;
+    return -1;
   }
 
-  // Resolve path to get node
-  node = path_resolve(sb, path);
-
-  // Check if path resolution successful
-  if (node == NULL){
-      *errnoptr = ENOENT;
-      return -1;
-  }
-  
-  // Extract file name from the path
-  file_name = strchr(path, '/') + 1;
-
-  // Check if file name length exceeds max allowed length
-  if (strlen(file_name) >= NAME_MAX_LEN){
-      *errnoptr = ENAMETOOLONG;
-      return -1;
-  }
-
-  // Initialize stbuf w/ 0s
-  memset(stbuf, 0, sizeof(struct stat));
-
-  // Fill in stbuf fields w/ appropriate values
   stbuf->st_uid = uid;
   stbuf->st_gid = gid;
-  stbuf->st_atime = (time_t) node->time[0].tv_sec;
-  stbuf->st_mtime = (time_t) node->time[1].tv_sec;
 
-  // Determine the type of node inode (directory or file) and set st_mode and st_nlink accordingly
-  if (node->type == 2){ // Directory
-      stbuf->st_mode = __S_IFDIR | 0755;
-      inode_t *children = (inode_t *) offset_to_pointer(sb, node->value.directory.children);
-
-      subdirectory_count = 0;
-
-      // Count the number of subdirectories (excluding files)
-      for (i = (size_t) 0; i < node->value.directory.num_children; i++){
-            if (children[i].type == 2){
-                  subdirectory_count++;
-            }
+  if (node->is_file) {
+    stbuf->st_mode = S_IFREG;
+    stbuf->st_nlink = ((nlink_t)1);
+    stbuf->st_size = ((off_t)node->type.file.total_size);
+    stbuf->st_atim = node->times[0];
+    stbuf->st_mtim = node->times[1];
+  } else {
+    stbuf->st_mode = S_IFDIR;
+    directory_t *dict = &node->type.directory;
+    __myfs_off_t *children = off_to_ptr(fsptr, dict->children);
+    stbuf->st_nlink = ((nlink_t)2);
+    for (size_t i = 1; i < dict->number_children; i++) {
+      if (!((node_t *)off_to_ptr(fsptr, children[i]))->is_file) {
+        stbuf->st_nlink++;
       }
-      stbuf->st_nlink = subdirectory_count;
+    }
   }
-  // File
-  else if (node->type == 1){
-      stbuf->st_mode = __S_IFREG | 0755;
-      stbuf->st_size = node->value.file.size;
-      stbuf->st_nlink = 1;
-  }
+
   return 0;
 }
 
@@ -784,8 +927,8 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
 
   strcpy(child->name, file_name);
   child->type = 1;
-  child->time[0] = ts;
-  child->time[1] = ts;
+  child->modified_time = ts;
+  child->accessed_time = ts;
   child->value.file.size = (size_t) 0;
   child->value.file.first_block = (offset) 0;
 

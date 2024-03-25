@@ -9,10 +9,20 @@
 #define NAME_MAX_LEN ((size_t)255)
 #define BLOCK_SIZE ((size_t)1024)
 
-typedef uint64_t offset;  
+typedef size_t offset;  
 typedef unsigned int u_int;
 
 /* Struct Declarations (1) */
+
+// Memory block structure
+typedef struct data_block {
+    size_t remaining; // Remaining space of the data block
+    offset next;       // Offset to the next memory block
+} data_block_t;
+
+typedef struct list {
+  offset head;
+} list_t;
 
 // Superblock structure
 typedef struct superblock {
@@ -21,17 +31,6 @@ typedef struct superblock {
     offset root_directory; // Offset to the root directory
     size_t size;           // Total size of the file system
 } superblock_t;
-
-// Inode structure (common fields for both files and directories)
-typedef struct inode {
-    char name[NAME_MAX_LEN + 1];  // Name of the file or directory (+ 1 for null terminator)
-    struct timespec time[2];    // [0] - last access time; [1] - last modification time
-    uint8_t type;                // Type: 1 for file, 2 for directory
-    union {
-        inode_file_t file;         // File-specific inode fields
-        inode_directory_t directory; // Directory-specific inode fields
-    } value;
-} inode_t;
 
 // (3) File-specific inode fields
 typedef struct inode_file {
@@ -45,12 +44,16 @@ typedef struct inode_directory {
     offset children;     // Offset to the children list
 } inode_directory_t;
 
-// Memory block structure
-typedef struct data_block {
-    size_t total_size; // Total size of the memory block
-    size_t user_size;  // Size of the memory block for user data
-    offset next;       // Offset to the next memory block
-} data_block_t;
+// Inode structure (common fields for both files and directories)
+typedef struct inode {
+    char name[NAME_MAX_LEN + ((size_t) 1)];  // Name of the file or directory (+ 1 for null terminator)
+    struct timespec time[2];    // [0] - last access time; [1] - last modification time
+    uint8_t type;                // Type: 1 for file, 2 for directory
+    union {
+        inode_file_t file;         // File-specific inode fields
+        inode_directory_t directory; // Directory-specific inode fields
+    } value;
+} inode_t;
 
 // (3) File block structure
 typedef struct file_block {
@@ -62,70 +65,198 @@ typedef struct file_block {
 
 /* END Struct declarations (1) */
 
+/* START memory allocation implementation */
+
+/**
+ * @brief (2) Allocate memory for a data block and add it to the list in ascending order.
+ * 
+ * This function allocates memory for a data block and inserts it into a linked list
+ * of allocated memory regions, maintaining ascending order based on memory addresses.
+ * 
+ * @param fsptr Pointer to the start of the file system.
+ * @param ll Pointer to the linked list of allocated memory regions.
+ * @param new_block Pointer to the data block to be allocated.
+ */
+void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block);
+
+/**
+ * @brief (2) Extends the available block to accommodate additional size, if possible.
+ * 
+ * This function extends the available block to accommodate the specified size
+ * if it has enough remaining space. If the available block does not have enough
+ * space, it extends the original available block as much as possible and updates
+ * the size accordingly.
+ * 
+ * @param fsptr Pointer to the start of the file system.
+ * @param before_avail Pointer to the data block before the available block.
+ * @param org_avail Pointer to the original available block.
+ * @param avail_off Offset of the available block.
+ * @param size Pointer to the size to be extended.
+ */
+void extend_avail_block(void *fsptr, data_block_t *before_avail,
+                        data_block_t *org_avail, offset avail_off,
+                        size_t *size);
+
+/**
+ * @brief (2) Gets a memory allocation block of the specified size.
+ * 
+ * This function retrieves a memory allocation block of the specified size
+ * from the free space managed by the provided list. It first attempts to
+ * allocate space from a selected space indicated by selected_block. If the selected
+ * space does not have enough space, or if no selected space is specified, it
+ * searches for the largest available block in the list and allocates space from it.
+ * 
+ * @param fsptr Pointer to the start of the file system.
+ * @param ll Pointer to the list of free blocks.
+ * @param selected_block Pointer to the original selected space block, if any.
+ * @param size Pointer to the size of the allocation to be obtained.
+ * @return Pointer to the allocated memory block, or NULL if allocation fails.
+ */
+void *get_memory_block(void *fsptr, list_t *ll, data_block_t *selected_block,
+                     size_t *size);    
+
+/**
+ * @brief (2) Allocates a memory block of the given size.
+ *
+ * If the size is zero, returns NULL. Otherwise, calls get_allocation to
+ * allocate memory of the specified size.
+ *
+ * @param fsptr Pointer to the start of the file system.
+ * @param selected_ptr Pointer to the preferred memory block. If NULL, defaults to fsptr.
+ * @param size Pointer to the size of the memory block to allocate.
+ * @return Pointer to the allocated memory block, or NULL if size is zero or memory allocation fails.
+ */
+void *malloc_impl(void *fsptr, void *selected_ptr, size_t *size);
+
+/**
+ * @brief (2) Reallocates memory block pointed to by orig_ptr to the specified size.
+ *
+ * If size is 0, frees the memory block pointed to by orig_ptr and returns NULL.
+ * If orig_ptr is NULL, reallocates memory equivalent to a call to malloc(size) for size bytes.
+ * If the new size is less than the original size and not enough to make a new memory block, 
+ * the remaining memory is kept.
+ * If the new size is less than the original size and enough to make a new memory block, 
+ * a new memory block is created for the remaining memory and added to the free memory list.
+ * If the new size is greater than the original size, a new memory block is allocated, 
+ * contents of the original memory block are copied to the new memory block, 
+ * and the original memory block is freed.
+ *
+ * @param fsptr Pointer to the start of the file system.
+ * @param orig_ptr Pointer to the original memory block.
+ * @param size Pointer to the new size of the memory block.
+ * @return Pointer to the reallocated memory block, or NULL if size is 0 or memory allocation fails.
+ */
+void *realloc_impl(void *fsptr, void *orig_ptr, size_t *size);
+
+/**
+ * @brief (2) Frees the memory block pointed to by ptr and adds it back to the free memory list.
+ *
+ * If ptr is NULL, the function does nothing.
+ *
+ * @param fsptr Pointer to the start of the file system.
+ * @param ptr Pointer to the memory block to be freed.
+ */
+void free_impl(void *fsptr, void *ptr);
+
+/* END memory allocation implementation */
+
 /* Start fuse helper methods */
 
 /// @brief (1) Convert a pointer to an offset relative to the start of the file system
-/// @param pointer 
 /// @param fsptr 
+/// @param pointer 
 /// @return 
-static inline offset pointer_to_offset (void *pointer, void *fsptr);  
+offset pointer_to_offset (void *fsptr, void *pointer);  
 
 /// @brief (1) Calculate an offset relative to the start of the file system to a pointer
-/// @param pointer 
-/// @param my_offset 
-/// @return 
-static inline void *offset_to_pointer (void *pointer, offset my_offset);
-
-/// @brief (1) Mount a file system given a pointer to its start and its size
 /// @param fsptr 
-/// @param fssize 
-/// @return 
-superblock_t *mount_filesystem (void *fsptr, size_t fssize);
-
-/// @brief (2) Calculates the total size of free memory in the file system
-/// @param sb 
-/// @return 
-size_t free_memory_size (superblock_t *sb);
-
-/// @brief (2) Retrieves a memory block of the specified size from the free memory pool
-/// @param sb 
-/// @param size 
-/// @return 
-data_block_t *get_memory_block(superblock_t *sb, size_t size);
-
-/// @brief (2) Adds a data block to the free memory pool
-/// @param sb 
 /// @param my_offset 
-void add_to_free_memory (superblock_t *sb, offset my_offset);
-
-/// @brief (2) Frees a data block and adds it to the free memory pool
-/// @param sb 
-/// @param my_offset 
-void free_impl (superblock_t *sb, offset my_offset);
-
-/// @brief (2) Allocates a memory block of the specified dsize from the free memory pool
-/// @param sb 
-/// @param size 
 /// @return 
-offset allocate_memory (superblock_t *sb, size_t size);
+void *offset_to_pointer (void *fsptr, offset my_offset);
 
-/// @brief (2) Reallocates a data block to the specified size
-/// @param sb 
-/// @param my_offset 
-/// @param size 
+/// @brief (1)
+/// @param fsptr 
 /// @return 
-offset reallocate_memory (superblock_t *sb, offset my_offset, size_t size);
+void *get_free_memory_pointer(void *fsptr);
 
-/// @brief (2) Get max free size from all data blocks
-/// @param sb 
-/// @return 
-size_t get_max_free_size (superblock_t *sb);
+/**
+ * @brief (1) Updates the access and modification times of the specified inode.
+ *
+ * If node is NULL, the function does nothing.
+ *
+ * @param node Pointer to the inode whose times are to be updated.
+ * @param set_mod Flag indicating whether to update modification time as well.
+ *                If set_mod is non-zero, modification time will be updated.
+ *                If set_mod is zero, only access time will be updated.
+ */
+void update_time(inode_t *node, int set_mod);
 
-/// @brief (4) Resolves a path to its corresponding inode in the file system
-/// @param sb 
-/// @param path 
-/// @return 
-inode_t *path_resolve (superblock_t *sb, const char *path);
+/**
+ * @brief (1) Mounts the filesystem represented by the provided memory buffer.
+ *
+ * If the filesystem is being mounted for the first time, initializes the superblock
+ * and sets up the root directory.
+ *
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param fssize Size of the filesystem.
+ */
+void mount_filesystem(void *fsptr, size_t fssize);
+
+/**
+ * @brief (4) Retrieves the last token (filename or directory name) from the given path.
+ *
+ * Finds the last occurrence of '/' in the path and extracts the token following it.
+ * Allocates memory for the token and returns a copy of it.
+ *
+ * @param path The path from which to extract the last token.
+ * @param token_len Pointer to store the length of the extracted token.
+ * @return Pointer to the extracted token, or NULL if memory allocation fails.
+ */
+char *get_last_token(const char *path, unsigned long *token_len);
+
+/**
+ * @brief (4) Tokenizes a string based on a delimiter character and skips a specified number of tokens.
+ *
+ * Splits the input path string into tokens using the given delimiter character.
+ * Allocates memory for the tokens array and returns it.
+ *
+ * @param token The delimiter character to use for tokenization.
+ * @param path The input path string to tokenize.
+ * @param skip_n_tokens The number of tokens to skip from the end of the tokenized array.
+ * @return An array of token strings, or NULL if memory allocation fails.
+ */
+char **tokenize(const char token, const char *path, int skip_n_tokens);
+
+/// @brief (4)
+/// @param tokens 
+void free_tokens(char **tokens);
+
+/**
+ * @brief (4) Retrieves the inode of a child node within a directory.
+ *
+ * Searches for the specified child node within the directory specified by dict.
+ * Returns a pointer to the inode of the child node if found, or NULL if not found.
+ * If the child node name is "..", returns a pointer to the parent directory inode.
+ *
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param dict Pointer to the directory inode structure.
+ * @param child Name of the child node to search for.
+ * @return Pointer to the inode of the child node if found, or NULL if not found.
+ */
+inode_t *get_node(void *fsptr, inode_directory_t *dict, const char *child);
+
+/**
+ * @brief (4) Resolves the path to retrieve the corresponding inode.
+ *
+ * Traverses the filesystem hierarchy based on the provided path to locate
+ * and return the inode corresponding to the specified path.
+ * 
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param path The path to resolve.
+ * @param skip_n_tokens Number of leading tokens to skip in the path.
+ * @return Pointer to the inode corresponding to the resolved path, or NULL if not found.
+ */
+inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
 
 /* END fuse helper methods */
 
