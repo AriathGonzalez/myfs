@@ -487,7 +487,7 @@ offset reallocate_memory (superblock_t *sb, offset my_offset, size_t size){
 }
 
 inode_t *path_resolve (superblock_t *sb, const char *path){
-      char *index, *new_path, *name, file_name[NAME_MAX_LEN];
+      char *index, *path_copy, *name, file_name[NAME_MAX_LEN];
       inode_t *node, *child;
       size_t size, i;
 
@@ -521,26 +521,27 @@ inode_t *path_resolve (superblock_t *sb, const char *path){
       }
 
       // Copy path to a new buffer
-      new_path = (char *) malloc((strlen(path) + 1) * sizeof(char));
-      if (new_path == NULL){
+      path_copy = (char *) malloc((strlen(path) + 1) * sizeof(char));
+      if (path_copy == NULL){
             return NULL;
       }
-      strcpy(new_path, path);
+      strcpy(path_copy, path);
 
       // Extract individual directory names from the path
-      name = new_path + 1;
-      index = strchr(name, '/');
+      name = path_copy + 1;   // pointer to 1 char after path (skipping '/')
+      index = strchr(name, '/');    // Get 1st occurrence of '/' in string pointed to by name
 
       // Traverse the directory structure to resolve the path
       while (strlen(name) != 0){
             child = NULL;
             if (index != NULL){
+                  // Size is the number of characters in current directory name
                   size = (size_t)  (((void *) index) - ((void *) name));
             }
             else {
                   size = (size_t) strlen(name);
             }
-            strncpy(file_name, name, size);
+            strncpy(file_name, name, size);     // Extract current directory name    
             file_name[size] = '\0';
 
             // Iterate through children of the current node to find the matching child
@@ -552,20 +553,20 @@ inode_t *path_resolve (superblock_t *sb, const char *path){
                   }
             }
 
-            memset(file_name, 0, size);
+            memset(file_name, 0, size);   // Clear buffer
 
             // If child not found or node is not in directory, return NULL
             if (node != child){
-                  free(new_path);
+                  free(path_copy);
                   return NULL;
             }
             if (index == NULL){
                   break;
             }
-            name = index + 1;
-            index = strchr(name, '/');
+            name = index + 1; // Start at beginning of next directory
+            index = strchr(name, '/');    // another '/'
       }
-      free(new_path);
+      free(path_copy);
       return node;
 }
 

@@ -33,13 +33,13 @@ typedef struct inode {
     } value;
 } inode_t;
 
-// File-specific inode fields
+// (3) File-specific inode fields
 typedef struct inode_file {
     size_t size;      // Size of the file
     offset first_block; // Offset to the first block of the file
 } inode_file_t;
 
-// Directory-specific inode fields
+// (3) Directory-specific inode fields
 typedef struct inode_directory {
     size_t num_children; // Number of children in the directory
     offset children;     // Offset to the children list
@@ -52,7 +52,7 @@ typedef struct data_block {
     offset next;       // Offset to the next memory block
 } data_block_t;
 
-// File block structure
+// (3) File block structure
 typedef struct file_block {
     size_t size;      // Size of the file block
     size_t allocated; // Allocated size of the file block
