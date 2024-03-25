@@ -764,40 +764,61 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
 
 /* End of helper functions */
 
+/**
+ * @brief Retrieves attributes of a file or directory.
+ *
+ * Retrieves the attributes of the file or directory specified by the given path.
+ * 
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param fssize Size of the filesystem.
+ * @param errnoptr Pointer to store error number in case of failure.
+ * @param uid User ID for setting the owner of the file.
+ * @param gid Group ID for setting the group of the file.
+ * @param path The path of the file or directory.
+ * @param stbuf Pointer to a struct where the attributes will be stored.
+ * @return 0 on success, -1 on failure.
+ */
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
                           gid_t gid, const char *path, struct stat *stbuf) {
-  handler(fsptr, fssize);
+    // Mount the filesystem
+    mount_filesystem(fsptr, fssize);
 
-  node_t *node = path_solver(fsptr, path, 0);
+    // Resolve the path to get the corresponding inode
+    inode_t *node = resolve_path(fsptr, path, 0);
 
-  // Path could not be solved
-  if (node == NULL) {
-    *errnoptr = ENOENT;
-    return -1;
-  }
-
-  stbuf->st_uid = uid;
-  stbuf->st_gid = gid;
-
-  if (node->is_file) {
-    stbuf->st_mode = S_IFREG;
-    stbuf->st_nlink = ((nlink_t)1);
-    stbuf->st_size = ((off_t)node->type.file.total_size);
-    stbuf->st_atim = node->times[0];
-    stbuf->st_mtim = node->times[1];
-  } else {
-    stbuf->st_mode = S_IFDIR;
-    directory_t *dict = &node->type.directory;
-    __myfs_off_t *children = off_to_ptr(fsptr, dict->children);
-    stbuf->st_nlink = ((nlink_t)2);
-    for (size_t i = 1; i < dict->number_children; i++) {
-      if (!((node_t *)off_to_ptr(fsptr, children[i]))->is_file) {
-        stbuf->st_nlink++;
-      }
+    // Path could not be resolved
+    if (node == NULL) {
+        *errnoptr = ENOENT;
+        return -1;
     }
-  }
 
-  return 0;
+    // Set UID and GID
+    stbuf->st_uid = uid;
+    stbuf->st_gid = gid;
+
+    // Set file or directory attributes
+    if (node->type == 1) {
+        // File attributes
+        stbuf->st_mode = __S_IFREG; // Regular file
+        stbuf->st_nlink = 1; // Number of hard links
+        stbuf->st_size = node->value.file.size; // Size of the file
+        stbuf->st_atime = node->times[0]; // Last access time
+        stbuf->st_mtime = node->times[1]; // Last modification time
+    } else {
+        // Directory attributes
+        stbuf->st_mode = __S_IFDIR; // Directory
+        inode_directory_t *dict = &node->value.directory;
+        offset *children = offset_to_pointer(fsptr, dict->children);
+        stbuf->st_nlink = 2; // Number of hard links (minimum 2 for directories)
+        for (size_t i = 1; i < dict->num_children; i++) {
+            inode_t *child_node = (inode_t *)offset_to_pointer(fsptr, children[i]);
+            if (child_node->type == 2) {
+                stbuf->st_nlink++;
+            }
+        }
+    }
+
+    return 0;
 }
 
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
