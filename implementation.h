@@ -116,7 +116,12 @@ offset allocate_memory (superblock_t *sb, size_t size);
 /// @return 
 offset reallocate_memory (superblock_t *sb, offset my_offset, size_t size);
 
-/// @brief (2) Resolves a path to its corresponding inode in the file system
+/// @brief (2) Get max free size from all data blocks
+/// @param sb 
+/// @return 
+size_t get_max_free_size (superblock_t *sb);
+
+/// @brief (4) Resolves a path to its corresponding inode in the file system
 /// @param sb 
 /// @param path 
 /// @return 

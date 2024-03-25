@@ -486,6 +486,23 @@ offset reallocate_memory (superblock_t *sb, offset my_offset, size_t size){
       return new_offset;
 }
 
+size_t get_max_free_size (superblock_t *sb){
+      data_block_t *db;
+      size_t max_free_size;
+
+      max_free_size = (size_t) 0;
+
+      for (db = (data_block_t *) offset_to_pointer(sb, sb->free_memory);
+           db != NULL;
+           db = (data_block_t *) (offset_to_pointer(sb, db->next))){
+
+            if (db->total_size > max_free_size){
+                  max_free_size = db->total_size;
+            }
+      }
+      return max_free_size;
+}
+
 inode_t *path_resolve (superblock_t *sb, const char *path){
       char *index, *path_copy, *name, file_name[NAME_MAX_LEN];
       inode_t *node, *child;
