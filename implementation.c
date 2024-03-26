@@ -764,20 +764,6 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
 
 /* End of helper functions */
 
-/**
- * @brief Retrieves attributes of a file or directory.
- *
- * Retrieves the attributes of the file or directory specified by the given path.
- * 
- * @param fsptr Pointer to the start of the filesystem.
- * @param fssize Size of the filesystem.
- * @param errnoptr Pointer to store error number in case of failure.
- * @param uid User ID for setting the owner of the file.
- * @param gid Group ID for setting the group of the file.
- * @param path The path of the file or directory.
- * @param stbuf Pointer to a struct where the attributes will be stored.
- * @return 0 on success, -1 on failure.
- */
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
                           gid_t gid, const char *path, struct stat *stbuf) {
     // Mount the filesystem
@@ -823,54 +809,59 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
 
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
-  superblock_t *sb;
-  inode_t *node, *child;
-  char **names;
-  size_t num_entries;
+    // Mount the filesystem
+    mount_filesystem(fsptr, fssize);
 
-  sb = mount_filesystem(fsptr, fssize);
-  if (sb == NULL){
-      *errnoptr = EFAULT;
-      return -1;
-  }
+    // Resolve the path to get the corresponding inode
+    inode_t *node = resolve_path(fsptr, path, 0);
 
-  node = path_resolve(sb, path);
-  if (node == NULL){
-      *errnoptr = ENOENT;
-      return -1;
-  }
+    // Path could not be resolved
+    if (node == NULL) {
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-  // Get the number of children (subdirectories and files) in the directory
-  num_entries = node->value.directory.num_children;
-  if (num_entries == (size_t) 0){
-      return 0;   // No entries in the directory
-  }
+    // Check if the node is a directory
+    if (node->type != 2) {
+        *errnoptr = ENOTDIR;
+        return -1;
+    }
 
-  // Allocate memory for storing names
-  names = (char **) calloc(num_entries, sizeof(char *));
-  if (names == NULL){
-      *errnoptr = ENOMEM;
-      return -1;
-  }
+    // Get the directory structure
+    inode_directory_t *dict = &node->value.directory;
 
-  // Allocate memory for each name and store them in the names array
-  for (size_t i = 0; i < num_entries; i++){
-      child = ((inode_t *) offset_to_pointer(sb, (node->value.directory.children + i * ((size_t) sizeof(inode_t)))));
-      names[i] = (char *) calloc(strlen(child->name), sizeof(char));
+    // Check if the directory is empty or contains only "." and ".."
+    if (dict->num_children <= 2) {
+        return 0;
+    }
 
-      if (names[i] == NULL){
-            // Free allocated memory on failure
-            for (size_t j = 0; j < i; j++){
-                  free(names[j]);
+    size_t n_children = dict->num_children;
+    // Allocate space for the names of all children, except "." and ".."
+    char **names = (char **)malloc((n_children - 2) * sizeof(char *));
+    if (names == NULL) {
+        *errnoptr = ENOMEM;
+        return -1;
+    }
+
+    offset *children = offset_to_pointer(fsptr, dict->children);
+
+    // Fill the array with the names of the directory entries
+    for (size_t i = 2; i < n_children; i++) {
+        inode_t *child_node = (inode_t *)offset_to_pointer(fsptr, children[i]);
+        names[i - 2] = strdup(child_node->name);
+        if (names[i - 2] == NULL) {
+            // Memory allocation failed, free the allocated memory
+            while (i > 2) {
+                free(names[--i - 2]);
             }
             free(names);
-            *errnoptr = EINVAL;
+            *errnoptr = ENOMEM;
             return -1;
-      }
-      strcpy(names[i], child->name);      // Copy the name into the allocated memory
-  }
-  *namesptr = names;    // Set output pointer to array of names
-  return num_entries;    // Return number of names
+        }
+    }
+
+    *namesptr = names;
+    return (int)(n_children - 2);
 }
 
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
