@@ -239,8 +239,8 @@
 
 void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block) {
     data_block_t *current_block;
-    offset current_offset = ll->head;
-    offset new_block_offset = pointer_to_offset(fsptr, new_block);
+    fs_offset current_offset = ll->head;
+    fs_offset new_block_offset = pointer_to_offset(fsptr, new_block);
 
     // Check if the new allocation comes before the first space in the linked list
     if (current_offset > new_block_offset) {
@@ -269,7 +269,7 @@ void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block) {
         current_offset = pointer_to_offset(fsptr, current_block);
 
         // Check if we can merge the new allocation with the next space
-        offset next_block_offset = current_block->next;
+        fs_offset next_block_offset = current_block->next;
         if (next_block_offset != 0) {
             if ((new_block_offset + sizeof(size_t) + new_block->remaining) == next_block_offset) {
                 data_block_t *next_block = offset_to_pointer(fsptr, next_block_offset);
@@ -293,9 +293,9 @@ void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block) {
 }
 
 void extend_avail_block(void *fsptr, data_block_t *before_avail,
-                        data_block_t *org_avail, offset avail_off,
+                        data_block_t *org_avail, fs_offset avail_off,
                         size_t *size) {
-    data_block_t *avail = off_to_ptr(fsptr, avail_off);
+    data_block_t *avail = offset_to_pointer(fsptr, avail_off);
     data_block_t *temp;
 
     // Check if all size bytes can be accommodated in the available block
@@ -339,13 +339,13 @@ void extend_avail_block(void *fsptr, data_block_t *before_avail,
 
 void *get_memory_block(void *fsptr, list_t *ll, data_block_t *selected_block,
                      size_t *size) {
-    offset selected_block_offset = 0;  // Offset for the selected space
-    offset before_current_offset;  // Offset before the current space
+    fs_offset selected_block_offset = 0;  // Offset for the selected space
+    fs_offset before_current_offset;  // Offset before the current space
     data_block_t *before_current_block;  // Pointer to the block before the current space
-    offset current_offset;  // Offset of the current space
+    fs_offset current_offset;  // Offset of the current space
     data_block_t *current_block;  // Pointer to the current space
     data_block_t *before_largest_block = NULL;  // Pointer to the block before the largest block
-    offset largest_offset;  // Offset of the largest block
+    fs_offset largest_offset;  // Offset of the largest block
     data_block_t *largest_block;  // Pointer to the largest block
     size_t largest_size;  // Size of the largest block
     data_block_t *allocated_block = NULL;  // Pointer to the allocated memory block
@@ -528,14 +528,14 @@ void free_impl(void *fsptr, void *ptr) {
 
 /* YOUR HELPER FUNCTIONS GO HERE */
 
-offset pointer_to_offset (void *fsptr, void *pointer) {   
+fs_offset pointer_to_offset (void *fsptr, void *pointer) {   
       if (fsptr > pointer){
             return 0;   // Pointer is before the start of the file system
       }
-      return (offset) (pointer - fsptr);  // Calculate offset
+      return (fs_offset) (pointer - fsptr);  // Calculate offset
 }
 
-void *offset_to_pointer (void *fsptr, offset my_offset){
+void *offset_to_pointer (void *fsptr, fs_offset my_offset){
       void *pointer = fsptr + my_offset;
 
       // Check for overflow
@@ -579,7 +579,7 @@ void mount_filesystem(void *fsptr, size_t fssize) {
 
         // Save space for the root directory
         sb->root_directory = sizeof(superblock_t); // Store only the offset
-        inode_t *root = off_to_ptr(fsptr, sb->root_directory);
+        inode_t *root = offset_to_pointer(fsptr, sb->root_directory);
 
         // Set up the root directory
         memset(root->name, '\0', NAME_MAX_LEN + 1); // Fill name with null characters
@@ -591,9 +591,9 @@ void mount_filesystem(void *fsptr, size_t fssize) {
 
         // Set up root's children
         size_t *children_size = offset_to_pointer(fsptr, sb->root_directory + sizeof(inode_t));
-        *children_size = 4 * sizeof(offset); // Set size of children array header
+        *children_size = 4 * sizeof(fs_offset); // Set size of children array header
         dict->children = pointer_to_offset(fsptr, (void *)children_size + sizeof(size_t));
-        offset *ptr = offset_to_pointer(fsptr, dict->children);
+        fs_offset *ptr = offset_to_pointer(fsptr, dict->children);
         *ptr = 0; // Set parent of root to null
 
         // Set the pointer to the first free block
@@ -699,7 +699,7 @@ void free_tokens(char **tokens) {
 
 inode_t *get_node(void *fsptr, inode_directory_t *dict, const char *child) {
     size_t num_children = dict->num_children;
-    offset *children_offsets = offset_to_pointer(fsptr, dict->children);
+    fs_offset *children_offsets = offset_to_pointer(fsptr, dict->children);
     inode_t *node = NULL;
 
     // Check if the child node is the parent directory
@@ -728,7 +728,7 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
     }
 
     // Get the inode of the root directory
-    inode_t *node = off_to_ptr(fsptr, ((superblock_t *)fsptr)->root_directory);
+    inode_t *node = offset_to_pointer(fsptr, ((superblock_t *)fsptr)->root_directory);
 
     // If the path is just "/", return the root directory inode
     if (path[1] == '\0') {
@@ -765,7 +765,7 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
 inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile) {
     // Call path solver without the last node name because that is the file name
     // if valid path name is given
-    inode_t *parent_node = path_solver(fsptr, path, 1);
+    inode_t *parent_node = resolve_path(fsptr, path, 1);
 
     // Check that the file parent exist
     if (parent_node == NULL) {
@@ -804,12 +804,12 @@ inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile) {
     }
 
     // Access children block
-    offset *children = offset_to_pointer(fsptr, dict->children);
+    fs_offset *children = offset_to_pointer(fsptr, dict->children);
     data_block_t *block = (((void *)children) - sizeof(size_t));
 
     // Make the node and put it in the directory child list
     // First check if the directory list has free places to add nodes to
-    size_t max_children = (block->remaining) / sizeof(offset);
+    size_t max_children = (block->remaining) / sizeof(fs_offset);
     size_t ask_size;
     if (max_children == dict->num_children) {
         ask_size = block->remaining * 2;
@@ -825,7 +825,7 @@ inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile) {
 
         // Update offset to access the children
         dict->children = pointer_to_offset(fsptr, new_children);
-        children = ((offset *)new_children);
+        children = ((fs_offset *)new_children);
     }
 
     // Allocate memory for new node
@@ -860,8 +860,8 @@ inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile) {
         dict->num_children = 1;  // Set initial number of children to 1 (for '..')
 
         // Allocate memory for children block
-        ask_size = 4 * sizeof(offset);  // Allocate space for 4 children initially
-        offset *ptr = ((offset *)malloc_impl(fsptr, NULL, &ask_size));
+        ask_size = 4 * sizeof(fs_offset);  // Allocate space for 4 children initially
+        fs_offset *ptr = ((fs_offset *)malloc_impl(fsptr, NULL, &ask_size));
         if ((ask_size != 0) || (ptr == NULL)) {
             free_impl(fsptr, ptr);
             *errnoptr = ENOSPC;  // No space left on device
@@ -901,14 +901,14 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
         // File attributes
         stbuf->st_mode = __S_IFREG; // Regular file
         stbuf->st_nlink = 1; // Number of hard links
-        stbuf->st_size = node->value.file.size; // Size of the file
-        stbuf->st_atime = node->time[0]; // Last access time
-        stbuf->st_mtime = node->time[1]; // Last modification time
+        stbuf->st_size = (off_t) node->value.file.size; // Size of the file
+        stbuf->st_atime = (__time_t) node->time[0].tv_sec; // Last access time
+        stbuf->st_mtime = (__time_t) node->time[1].tv_sec; // Last modification time
     } else {
         // Directory attributes
         stbuf->st_mode = __S_IFDIR; // Directory
         inode_directory_t *dict = &node->value.directory;
-        offset *children = offset_to_pointer(fsptr, dict->children);
+        fs_offset *children = offset_to_pointer(fsptr, dict->children);
         stbuf->st_nlink = 2; // Number of hard links (minimum 2 for directories)
         for (size_t i = 1; i < dict->num_children; i++) {
             inode_t *child_node = (inode_t *)offset_to_pointer(fsptr, children[i]);
@@ -957,7 +957,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    offset *children = offset_to_pointer(fsptr, dict->children);
+    fs_offset *children = offset_to_pointer(fsptr, dict->children);
 
     // Fill the array with the names of the directory entries
     for (size_t i = 2; i < n_children; i++) {
@@ -980,7 +980,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  handler(fsptr, fssize);
+  mount_filesystem(fsptr, fssize);
 
   // Make a directory, 1 because it is a file
   inode_t *node = make_inode(fsptr, path, errnoptr, 1);

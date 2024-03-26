@@ -9,7 +9,7 @@
 #define NAME_MAX_LEN ((size_t)255)
 #define BLOCK_SIZE ((size_t)1024)
 
-typedef size_t offset;  
+typedef size_t fs_offset;  
 typedef unsigned int u_int;
 
 /* Struct Declarations (1) */
@@ -17,31 +17,31 @@ typedef unsigned int u_int;
 // Memory block structure
 typedef struct data_block {
     size_t remaining; // Remaining space of the data block
-    offset next;       // Offset to the next memory block
+    fs_offset next;       // Offset to the next memory block
 } data_block_t;
 
 typedef struct list {
-  offset head;
+  fs_offset head;
 } list_t;
 
 // Superblock structure
 typedef struct superblock {
     uint32_t magic_number; // Magic number identifying the file system
-    offset free_memory;    // Offset to the free memory
-    offset root_directory; // Offset to the root directory
+    fs_offset free_memory;    // Offset to the free memory
+    fs_offset root_directory; // Offset to the root directory
     size_t size;           // Total size of the file system
 } superblock_t;
 
 // (3) File-specific inode fields
 typedef struct inode_file {
     size_t size;      // Size of the file
-    offset first_block; // Offset to the first block of the file
+    fs_offset first_block; // Offset to the first block of the file
 } inode_file_t;
 
 // (3) Directory-specific inode fields
 typedef struct inode_directory {
     size_t num_children; // Number of children in the directory
-    offset children;     // Offset to the children list
+    fs_offset children;     // Offset to the children list
 } inode_directory_t;
 
 // Inode structure (common fields for both files and directories)
@@ -59,8 +59,8 @@ typedef struct inode {
 typedef struct file_block {
     size_t size;      // Size of the file block
     size_t allocated; // Allocated size of the file block
-    offset next;      // Offset to the next file block
-    offset data;      // Offset to the data of the file block
+    fs_offset next;      // Offset to the next file block
+    fs_offset data;      // Offset to the data of the file block
 } file_block_t;
 
 /* END Struct declarations (1) */
@@ -94,7 +94,7 @@ void add_to_free_memory(void *fsptr, list_t *ll, data_block_t *new_block);
  * @param size Pointer to the size to be extended.
  */
 void extend_avail_block(void *fsptr, data_block_t *before_avail,
-                        data_block_t *org_avail, offset avail_off,
+                        data_block_t *org_avail, fs_offset avail_off,
                         size_t *size);
 
 /**
@@ -166,13 +166,13 @@ void free_impl(void *fsptr, void *ptr);
 /// @param fsptr 
 /// @param pointer 
 /// @return 
-offset pointer_to_offset (void *fsptr, void *pointer);  
+fs_offset pointer_to_offset (void *fsptr, void *pointer);  
 
 /// @brief (1) Calculate an offset relative to the start of the file system to a pointer
 /// @param fsptr 
 /// @param my_offset 
 /// @return 
-void *offset_to_pointer (void *fsptr, offset my_offset);
+void *offset_to_pointer (void *fsptr, fs_offset my_offset);
 
 /// @brief (1)
 /// @param fsptr 
