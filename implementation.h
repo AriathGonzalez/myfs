@@ -398,12 +398,21 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path);
 
-/// @brief 
-/// @param fsptr 
-/// @param fssize 
-/// @param errnoptr 
-/// @param path 
-/// @return 
+/**
+ * Emulates the mkdir system call on a filesystem.
+ *
+ * This function creates a directory indicated by the given path.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param fssize Size of the filesystem.
+ * @param errnoptr Pointer to an integer where error code will be stored on failure.
+ * @param path Path of the directory to be created.
+ * @return 0 on success, -1 on failure with *errnoptr set appropriately.
+ *
+ * @brief (7) Emulates the mkdir system call on a filesystem by creating the directory indicated by the given path.
+ *
+ * The error codes are documented in man 2 mkdir.
+ */
 int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path);
 

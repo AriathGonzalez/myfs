@@ -1032,23 +1032,22 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   return -1;
 }
 
-/* Implements an emulation of the mkdir system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call creates the directory indicated by path.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 mkdir.
-
-*/
 int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  /* STUB */
-  return -1;
+  mount_filesystem(fsptr, fssize);
+
+  // Make a directory, 0 because it is not a file
+  inode_t *node = make_node(fsptr, path, errnoptr, 0);
+
+  // Check if the node was successfully created, if it wasn't the errnoptr was
+  // already set so we just return failure with -1
+  if (node == NULL) {
+    return -1;
+  }
+
+  return 0;
 }
+
 
 /* Implements an emulation of the rename system call on the filesystem 
    of size fssize pointed to by fsptr. 
