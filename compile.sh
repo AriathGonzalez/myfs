@@ -9,4 +9,4 @@ make clean
 gcc -g -O0 -Wall myfs.c implementation.c `pkg-config fuse --cflags --libs` -o myfs
 
 # Run gdb
-gdb --args ./myfs --backupfile=test.myfs ~/fuse_mnt/ -f
+gdb --args ./myfs --backupfile=test.myfs ~/fuse-mnt/ -f

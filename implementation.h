@@ -234,16 +234,16 @@ void free_tokens(char **tokens);
 /**
  * @brief (4) Retrieves the inode of a child node within a directory.
  *
- * Searches for the specified child node within the directory specified by dict.
+ * Searches for the specified child node within the directory specified by directory.
  * Returns a pointer to the inode of the child node if found, or NULL if not found.
  * If the child node name is "..", returns a pointer to the parent directory inode.
  *
  * @param fsptr Pointer to the start of the filesystem.
- * @param dict Pointer to the directory inode structure.
+ * @param directory Pointer to the directory inode structure.
  * @param child Name of the child node to search for.
  * @return Pointer to the inode of the child node if found, or NULL if not found.
  */
-inode_t *get_node(void *fsptr, inode_directory_t *dict, const char *child);
+inode_t *get_node(void *fsptr, inode_directory_t *directory, const char *child);
 
 /**
  * @brief (4) Resolves the path to retrieve the corresponding inode.
@@ -269,7 +269,7 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens);
  * @param isfile Indicates whether the inode to be created is a file (1) or directory (0).
  * @return Pointer to the newly created inode on success, NULL on failure.
  */
-inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile);
+inode_t *make_node(void *fsptr, const char *path, int *errnoptr, int is_file);
 
 /* END fuse helper methods */
 
