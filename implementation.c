@@ -878,6 +878,148 @@ inode_t *make_node(void *fsptr, const char *path, int *errnoptr, int is_file) {
     return new_node;
 }
 
+void remove_data(void *fsptr, file_block_t *block, size_t size) {
+  // Check if the block is NULL
+  if (block == NULL) {
+    return;
+  }
+
+  size_t idx = 0;
+
+  // Find the position to cut the file and free the rest
+  while (size != 0) {
+    // If cutting within this block
+    if (size > block->allocated) {
+      size -= block->allocated;
+      block = offset_to_pointer(fsptr, block->next);
+    } else {
+      idx = size;
+      size = 0;
+    }
+  }
+
+  // Free the data starting at idx
+  if ((idx + sizeof(data_block_t)) < block->allocated) {
+    size_t *header = (size_t *)&((char *)offset_to_pointer(fsptr, block->data))[idx];
+    *header = block->allocated - idx - sizeof(size_t);
+    // Free the memory
+    free_impl(fsptr, ((void *)header) + sizeof(size_t));
+  }
+
+  // Free all data and blocks after this one
+  block = offset_to_pointer(fsptr, block->next);
+  file_block_t *next_block;
+
+  while (block != fsptr) {
+    // Free the data block
+    free_impl(fsptr, offset_to_pointer(fsptr, block->data));
+
+    // Get the next block before freeing the current block
+    next_block = offset_to_pointer(fsptr, block->next);
+    // Free the file block
+    free_impl(fsptr, block);
+
+    // Update the block pointer to the next one
+    block = next_block;
+  }
+}
+
+file_block_t *malloc_file_block(void *fsptr, int *errnoptr) {
+    size_t block_size = sizeof(file_block_t);
+    file_block_t *block = malloc_impl(fsptr, NULL, &block_size);
+    if (!block) {
+        *errnoptr = ENOSPC; // No space left on device
+        return NULL;
+    }
+    memset(block, 0, sizeof(file_block_t));
+    return block;
+}
+
+int append_data_block(void *fsptr, file_block_t *block, size_t size, int *errnoptr) {
+    size_t block_space = block->size - block->allocated;
+    size_t append_size = size < block_space ? size : block_space;
+    void *data_block = &((char *)offset_to_pointer(fsptr, block->data))[block->allocated];
+    memset(data_block, 0, append_size);
+    block->allocated += append_size;
+    if (append_size < size) {
+        *errnoptr = ENOSPC;
+        return 0;
+    }
+    return 1;
+}
+
+int extend_block_with_zeros(void *fsptr, file_block_t *block, size_t size) {
+    size_t block_space = block->size - block->allocated;
+    size_t append_size = size < block_space ? size : block_space;
+    void *data_block = &((char *)offset_to_pointer(fsptr, block->data))[block->allocated];
+    memset(data_block, 0, append_size);
+    block->allocated += append_size;
+    return append_size == size ? 1 : 0;
+}
+
+void free_file_blocks(void *fsptr, fs_offset first_block) {
+    file_block_t *block = offset_to_pointer(fsptr, first_block);
+    file_block_t *next_block;
+
+    while (block != NULL) {
+        next_block = offset_to_pointer(fsptr, block->next);
+        free_impl(fsptr, block); // Free the current block
+        block = next_block; // Move to the next block
+    }
+}
+
+int add_data(void *fsptr, inode_file_t *file, size_t size, int *errnoptr) {
+  file_block_t *block = offset_to_pointer(fsptr, file->first_block);
+
+  // Variables for later use
+  file_block_t *prev_block = NULL;
+  //   size_t initial_file_size = file->size;
+
+  // Handle case when file is empty: append first one manually
+  if (((void *)block) == fsptr) {
+    block = malloc_file_block(fsptr, errnoptr);
+    if (!block)
+      return -1;
+    // Append first file_block
+    file->first_block = pointer_to_offset(fsptr, block);
+    // Add the first data block
+    size_t block_size = size < BLOCK_SIZE ? size : BLOCK_SIZE;
+    if (!append_data_block(fsptr, block, block_size, errnoptr))
+      return -1;
+    size -= block_size;
+  }
+  // Extend the last block by appending zeros
+  else {
+    while (block->next != 0) {
+      size_t block_space = block->size - block->allocated;
+      size_t append_size = size < block_space ? size : block_space;
+      if (!extend_block_with_zeros(fsptr, block, append_size))
+        return -1;
+      size -= append_size;
+      if (size == 0)
+        return 0;
+      block = offset_to_pointer(fsptr, block->next);
+    }
+  }
+
+  // Append blocks until all data is added
+  while (size > 0) {
+    block = malloc_file_block(fsptr, errnoptr);
+    if (!block)
+      return -1;
+    if (!append_data_block(fsptr, block, size, errnoptr)) {
+      free_file_blocks(fsptr, file->first_block);
+      return -1;
+    }
+    size -= block->allocated;
+    if (prev_block)
+      prev_block->next = pointer_to_offset(fsptr, block);
+    prev_block = block;
+  }
+
+  return 0;
+}
+
 /* End of helper functions */
 
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
@@ -1071,26 +1213,62 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
   return -1;
 }
 
-/* Implements an emulation of the truncate system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call changes the size of the file indicated by path to offset
-   bytes.
-
-   When the file becomes smaller due to the call, the extending bytes are
-   removed. When it becomes larger, zeros are appended.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 truncate.
-
-*/
 int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
                            const char *path, off_t offset) {
-  /* STUB */
-  return -1;
+  mount_filesystem(fsptr, fssize);
+
+  // Check if offset is negative
+  if (offset < 0) {
+    *errnoptr = EFAULT; // Bad address
+    return -1;
+  }
+
+  size_t new_size = (size_t)offset;
+
+  // Resolve the path to get the node representing the file
+  inode_t *node = resolve_path(fsptr, path, 0);
+
+  // Check if the path is valid
+  if (node == NULL) {
+    *errnoptr = ENOENT; // No such file or directory
+    return -1;
+  }
+
+  // Ensure that the node represents a file
+  if (node->type == 1) {
+    *errnoptr = EISDIR; // Is a directory
+    return -1;
+  }
+
+  inode_file_t *file = &node->value.file;
+  file_block_t *block = offset_to_pointer(fsptr, file->first_block);
+
+  // If the new size is the same, do nothing
+  if (file->size == new_size) {
+    update_time(node, 0); // File access only
+    return 0;
+  }
+  // If the new size is smaller, remove excess data
+  else if (file->size > new_size) {
+    update_time(node, 1); // File access and modification
+
+    // Update the file size
+    file->size = new_size;
+
+    // Remove excess data from the file
+    remove_data(fsptr, block, new_size);
+  }
+  // If the new size is larger, append zeros to extend the file
+  else {
+    update_time(node, 1); // File access and modification
+
+    // Extend the file by appending zeros
+    if (add_data(fsptr, file, new_size, errnoptr) != 0) {
+      return -1;
+    }
+  }
+
+  return 0; // Success
 }
 
 /* Implements an emulation of the open system call on the filesystem 

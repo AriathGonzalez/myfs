@@ -271,6 +271,68 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens);
  */
 inode_t *make_node(void *fsptr, const char *path, int *errnoptr, int is_file);
 
+/**
+ * Removes data from a file block and frees associated memory.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param block Pointer to the file block.
+ * @param size Number of bytes to remove.
+ *
+ * @brief (8) Removes data from a file block and frees associated memory.
+ */
+void remove_data(void *fsptr, file_block_t *block, size_t size);
+
+/**
+ * (8) Allocates a new file block in the filesystem.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param errnoptr Pointer to an integer where error code will be stored on failure.
+ * @return Pointer to the allocated file block on success, NULL on failure with *errnoptr set appropriately.
+ */
+file_block_t *malloc_file_block(void *fsptr, int *errnoptr);
+
+/**
+ * (8) Appends data to a file block.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param block Pointer to the file block.
+ * @param size Size of the data to append.
+ * @param errnoptr Pointer to an integer where error code will be stored on failure.
+ * @return 1 on success, 0 on failure with *errnoptr set appropriately.
+ */
+int append_data_block(void *fsptr, file_block_t *block, size_t size, int *errnoptr);
+
+/**
+ * (8) Extends a file block by appending zeros.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param block Pointer to the file block to extend.
+ * @param size Size of the extension in bytes.
+ * @return 1 on success, 0 on failure.
+ */
+int extend_block_with_zeros(void *fsptr, file_block_t *block, size_t size);
+
+/**
+ * (8) Frees all file blocks associated with a file.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param first_block Pointer to the first file block of the file.
+ */
+void free_file_blocks(void *fsptr, fs_offset first_block);
+
+/**
+ * Adds data to a file in the filesystem.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param file Pointer to the inode of the file.
+ * @param size Size of the data to add.
+ * @param errnoptr Pointer to an integer where error code will be stored on failure.
+ * @return 0 on success, -1 on failure with *errnoptr set appropriately.
+ *
+ * @brief (8) Adds data to a file in the filesystem.
+ */
+int add_data(void *fsptr, inode_file_t *file, size_t size, int *errnoptr);
+
 /* END fuse helper methods */
 
 /* START fuse functions declarations */
@@ -426,13 +488,18 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                          const char *from, const char *to);
 
-/// @brief 
-/// @param fsptr 
-/// @param fssize 
-/// @param errnoptr 
-/// @param path 
-/// @param offset 
-/// @return 
+/**
+ * Emulates the truncate system call on the filesystem.
+ *
+ * @param fsptr Pointer to the filesystem.
+ * @param fssize Size of the filesystem.
+ * @param errnoptr Pointer to an integer where error code will be stored on failure.
+ * @param path Path to the file.
+ * @param offset New size of the file in bytes.
+ * @return 0 on success, -1 on failure with *errnoptr set appropriately.
+ *
+ * @brief (8) Emulates the truncate system call on the filesystem.
+ */
 int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
                            const char *path, off_t offset);
 
