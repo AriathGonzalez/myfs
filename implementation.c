@@ -762,6 +762,120 @@ inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
     return node;
 }
 
+inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile) {
+    // Call path solver without the last node name because that is the file name
+    // if valid path name is given
+    inode_t *parent_node = path_solver(fsptr, path, 1);
+
+    // Check that the file parent exist
+    if (parent_node == NULL) {
+        *errnoptr = ENOENT;  // No such file or directory
+        return NULL;
+    }
+
+    // Check that the node returned is a directory
+    if (parent_node->type != 2) {
+        *errnoptr = ENOTDIR;  // Not a directory
+        return NULL;
+    }
+
+    // Get directory from node
+    inode_directory_t *dict = &parent_node->value.directory;
+
+    // Get last token which has the filename
+    unsigned long len;
+    char *new_node_name = get_last_token(path, &len);
+
+    // Check that the parent doesn't contain a node with the same name as the one
+    // we are about to create
+    if (get_node(fsptr, dict, new_node_name) != NULL) {
+        *errnoptr = EEXIST;  // File already exists
+        return NULL;
+    }
+
+    if (len == 0) {
+        *errnoptr = ENOENT;  // No such file or directory
+        return NULL;
+    }
+
+    if (len > NAME_MAX_LEN) {
+        *errnoptr = ENAMETOOLONG;  // File name too long
+        return NULL;
+    }
+
+    // Access children block
+    offset *children = offset_to_pointer(fsptr, dict->children);
+    data_block_t *block = (((void *)children) - sizeof(size_t));
+
+    // Make the node and put it in the directory child list
+    // First check if the directory list has free places to add nodes to
+    size_t max_children = (block->remaining) / sizeof(offset);
+    size_t ask_size;
+    if (max_children == dict->num_children) {
+        ask_size = block->remaining * 2;
+        // Make more space for another children
+        void *new_children = realloc_impl(fsptr, children, &ask_size);
+
+        // realloc_impl() always returns a new pointer if ask_size == 0, otherwise
+        // we don't have enough space in memory
+        if (ask_size != 0) {
+            *errnoptr = ENOSPC;  // No space left on device
+            return NULL;
+        }
+
+        // Update offset to access the children
+        dict->children = pointer_to_offset(fsptr, new_children);
+        children = ((offset *)new_children);
+    }
+
+    // Allocate memory for new node
+    ask_size = sizeof(inode_t);
+    inode_t *new_node = (inode_t *)malloc_impl(fsptr, NULL, &ask_size);
+    if ((ask_size != 0) || (new_node == NULL)) {
+        free_impl(fsptr, new_node);
+        *errnoptr = ENOSPC;  // No space left on device
+        return NULL;
+    }
+
+    // Initialize node attributes
+    memset(new_node->name, '\0', NAME_MAX_LEN + 1);  // Fill name characters with '\0'
+    memcpy(new_node->name, new_node_name, len);  // Copy given name into node->name
+    update_time(new_node, 1);  // Update node timestamps
+
+    // Add file node to directory children
+    children[dict->num_children] = pointer_to_offset(fsptr, new_node);
+    dict->num_children++;
+    update_time(parent_node, 1);
+
+    if (isfile == 1) {
+        // Make a node for the file with size of 0
+        new_node->type = 1;
+        inode_file_t *file = &new_node->value.file;
+        file->size = 0;
+        file->first_block = 0;
+    } else {
+        // Make a node for the directory
+        new_node->type = 2;
+        dict = &new_node->value.directory;
+        dict->num_children = 1;  // Set initial number of children to 1 (for '..')
+
+        // Allocate memory for children block
+        ask_size = 4 * sizeof(offset);  // Allocate space for 4 children initially
+        offset *ptr = ((offset *)malloc_impl(fsptr, NULL, &ask_size));
+        if ((ask_size != 0) || (ptr == NULL)) {
+            free_impl(fsptr, ptr);
+            *errnoptr = ENOSPC;  // No space left on device
+            return NULL;
+        }
+        // Save the offset to get to the children
+        dict->children = pointer_to_offset(fsptr, ptr);
+        // Set first child to point to its parent
+        *ptr = pointer_to_offset(fsptr, parent_node);
+    }
+
+    return new_node;
+}
+
 /* End of helper functions */
 
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
@@ -788,8 +902,8 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid,
         stbuf->st_mode = __S_IFREG; // Regular file
         stbuf->st_nlink = 1; // Number of hard links
         stbuf->st_size = node->value.file.size; // Size of the file
-        stbuf->st_atime = node->times[0]; // Last access time
-        stbuf->st_mtime = node->times[1]; // Last modification time
+        stbuf->st_atime = node->time[0]; // Last access time
+        stbuf->st_mtime = node->time[1]; // Last modification time
     } else {
         // Directory attributes
         stbuf->st_mode = __S_IFDIR; // Directory
@@ -866,85 +980,17 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  superblock_t *sb;
-  inode_t *node, *child;
-  char *file_name, *directory_path;
-  size_t directory_length, num_children;
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
+  handler(fsptr, fssize);
 
-  sb = mount_filesystem(fsptr, fssize);
-  if (sb == NULL){
-      *errnoptr = EFAULT;
-      return -1;
-  }
-  
-  // Check for available memory
-  if (((size_t) sizeof(inode_t)) > get_max_free_size(sb)) {
-      *errnoptr = ENOMEM;
-      return -1;          
+  // Make a directory, 1 because it is a file
+  inode_t *node = make_inode(fsptr, path, errnoptr, 1);
+
+  // Check if the node was successfully created, if it wasn't the errnoptr was
+  // already set so we just return failure with -1
+  if (node == NULL) {
+    return -1;
   }
 
-  // Extract file name and directory path
-  file_name = strchr(path, '/') + 1;
-  directory_length = strlen(path) - strlen(file_name);
-  if (strlen(file_name) >= NAME_MAX_LEN){
-      *errnoptr = ENAMETOOLONG;
-      return -1;
-  }
-
-  directory_path = (char *) malloc((directory_length + 1) * sizeof(char));
-  if (directory_path == NULL){
-      *errnoptr = ENOMEM;
-      return -1;
-  }
-
-  // Copy directory part of path to directory_path buffer
-  strncpy(directory_path, path, directory_length);
-  directory_path[directory_length] = '\0';
-
-  node = path_resolve(sb, directory_path);
-  if (node == NULL){    // Directory does not exist
-      free(directory_path);
-      *errnoptr = ENOENT;
-      return -1;
-  }
-
-  // Increment number of children in directory
-  node->value.directory.num_children++;
-  num_children = node->value.directory.num_children;
-
-  // Allocate memory for child nodes
-  if (num_children == 1){
-      // One child, allocate memory for children array
-      node->value.directory.children = allocate_memory(sb, ((size_t) sizeof(inode_t)));
-      if (node->value.directory.children == (offset) 0){    // Allocation fail
-            *errnoptr = ENOMEM;
-            return -1;
-      }
-  }
-  else {
-      // If directory already has more than 1 child, reallocate memory for the children array
-      // to accomodate new child
-      node->value.directory.children = reallocate_memory(sb,
-      node->value.directory.children, num_children * ((size_t) sizeof(inode_t)));
-      if (node->value.directory.children == (offset) 0){    // Allocation fail
-            *errnoptr = ENOMEM;
-            return -1;
-      }
-  }
-
-  // Set up child node (regular file)
-  child = (inode_t *) offset_to_pointer(sb, (node->value.directory.children + (num_children - 1) * ((size_t) sizeof(inode_t)))); 
-
-  strcpy(child->name, file_name);
-  child->type = 1;
-  child->modified_time = ts;
-  child->accessed_time = ts;
-  child->value.file.size = (size_t) 0;
-  child->value.file.first_block = (offset) 0;
-
-  free(directory_path);
   return 0;
 }
 

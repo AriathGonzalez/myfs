@@ -256,7 +256,20 @@ inode_t *get_node(void *fsptr, inode_directory_t *dict, const char *child);
  * @param skip_n_tokens Number of leading tokens to skip in the path.
  * @return Pointer to the inode corresponding to the resolved path, or NULL if not found.
  */
-inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens) {
+inode_t *resolve_path(void *fsptr, const char *path, int skip_n_tokens);
+
+/**
+ * @brief (6) Creates a new inode (file or directory) at the specified path.
+ *
+ * Creates a new inode (file or directory) at the specified path within the filesystem.
+ * 
+ * @param fsptr Pointer to the start of the filesystem.
+ * @param path The path where the new inode will be created.
+ * @param errnoptr Pointer to store error number in case of failure.
+ * @param isfile Indicates whether the inode to be created is a file (1) or directory (0).
+ * @return Pointer to the newly created inode on success, NULL on failure.
+ */
+inode_t *make_inode(void *fsptr, const char *path, int *errnoptr, int isfile);
 
 /* END fuse helper methods */
 
