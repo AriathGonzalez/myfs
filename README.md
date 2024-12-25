@@ -44,16 +44,20 @@ To install FUSE on a Linux system, you can typically use your package manager. F
 
 ```bash
 sudo apt-get install libfuse-dev
+```
 
 ## Build
 
-- git clone https://github.com/yourusername/fuse-filesystem.git
-- cd fuse-filesystem
-- make
+```bash
+git clone https://github.com/yourusername/fuse-filesystem.git
+cd fuse-filesystem
+make
+```
 
 ## Usage
 
-- mkdir /mnt/myfs
-- ./myfs /mnt/myfs
-
+```bash
+mkdir /mnt/myfs
+./myfs /mnt/myfs
+```
 
