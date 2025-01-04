@@ -49,7 +49,7 @@ sudo apt-get install libfuse-dev
 ## Build
 
 ```bash
-git clone https://github.com/yourusername/fuse-filesystem.git
+git clone https://github.com/AriathGonzalez/myfs
 cd fuse-filesystem
 make
 ```
